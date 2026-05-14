@@ -2,11 +2,9 @@ fx_version 'cerulean'
 rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aware my resources *will* become incompatible once RedM ships.'
 game 'rdr3'
 
-author 'Auction System'
+author 'RexShack Gaming'
 description 'Real-time auction system for RSG Framework'
-version '1.0.0'
-
-rdr3_warning 'I understand that RedM is not officially supported and this resource may break at any time'
+version '2.0.0'
 
 ui_page 'web/dist/index.html'
 
@@ -25,7 +23,8 @@ client_scripts {
 
 server_scripts {
     'server/webhooks.lua',
-    'server/main.lua'
+    'server/main.lua',
+    'server/versionchecker.lua'
 }
 
 dependencies {
