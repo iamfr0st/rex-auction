@@ -1,0 +1,20 @@
+{
+  "name": "rex-auction-web",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "esbuild index.tsx --bundle --outfile=dist/index.js --target=es2020 --jsx=automatic --jsx-import-source=react --minify",
+    "build:dev": "esbuild index.tsx --bundle --outfile=dist/index.js --target=es2020 --jsx=automatic --jsx-import-source=react"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "lucide-react": "^0.460.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.0.0"
+  },
+  "main": "/web/index.tsx"
+}

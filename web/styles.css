@@ -1,0 +1,107 @@
+/* Auction System Styles */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(180, 140, 80, 0.3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(180, 140, 80, 0.5);
+}
+
+/* Western/Rustic Theme Custom Properties */
+:root {
+  --auction-gold: #d4a556;
+  --auction-amber: #b45c24;
+  --auction-dark: #1c1917;
+  --auction-card: #292524;
+}
+
+/* Selection highlighting */
+::selection {
+  background: rgba(212, 165, 86, 0.3);
+  color: white;
+}
+
+/* Input number spinner removal */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Smooth transitions */
+button, input, select {
+  transition: all 0.15s ease;
+}
+
+/* Card hover effects */
+.auction-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auction-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Focus states */
+input:focus, select:focus, button:focus {
+  outline: none;
+}
+
+/* Text overflow handling */
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Glass morphism effect for cards */
+.glass-card {
+  background: rgba(28, 25, 23, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(120, 100, 70, 0.2);
+}
+
+/* Pulse animation for ending auctions */
+@keyframes pulse-warning {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.ending-soon {
+  animation: pulse-warning 1.5s ease-in-out infinite;
+}
+
+/* Skeleton loading state */
+@keyframes shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #292524 0px, #3f3a37 40px, #292524 80px);
+  background-size: 200px 100%;
+  animation: shimmer 1.5s infinite;
+}

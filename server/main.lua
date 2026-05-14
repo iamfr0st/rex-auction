@@ -1,0 +1,886 @@
+local RSGCore = exports['rsg-core']:GetCoreObject()
+-- Auction System Server
+-- Handles auction state, escrow, validation, persistence, and broadcasting
+
+local Auctions = {}
+local Escrow = {
+    items = {},     -- [auctionId] = { item, count, metadata, owner }
+    funds = {}      -- [auctionId] = { playerId = amount }
+}
+local BidHistory = {}  -- [auctionId] = { { playerId, playerName, amount, timestamp } }
+local AuctionEndTimers = {}  -- [auctionId] = timerId
+local PendingPayouts = {}  -- [citizenid] = { money = amount, items = { { itemName, count, metadata, auctionId } } }
+
+local SAVE_FILE = 'auctions.json'
+local AUCTION_ID_PREFIX = 'AUC'
+
+-- ============================================
+-- UTILITY FUNCTIONS
+-- ============================================
+
+local function generateAuctionId()
+    return AUCTION_ID_PREFIX .. '_' .. os.time() .. '_' .. math.random(1000, 9999)
+end
+
+local function broadcastToAll(action, data)
+    TriggerClientEvent('auction:client:update', -1, { action = action, data = data })
+end
+
+-- Generate image URL from item name
+local function getItemImage(itemName)
+    if not itemName then return nil end
+    return 'nui://rsg-inventory/html/images/' .. itemName .. '.png'
+end
+
+-- Build image metadata for client (includes fallback info)
+local function buildImageMetadata(itemName)
+    return {
+        url = getItemImage(itemName),
+        itemName = itemName,
+        fallbackUrl = 'nui://' .. GetCurrentResourceName() .. '/web/dist/fallback.svg',
+        loaded = false
+    }
+end
+
+-- Track missing images for debugging
+local MissingImages = {}
+
+-- Log missing image report from client
+local function logMissingImage(itemName, imageUrl, playerSrc)
+    if not MissingImages[itemName] then
+        MissingImages[itemName] = { 
+            count = 0, 
+            firstReported = os.time(),
+            url = imageUrl 
+        }
+    end
+    MissingImages[itemName].count = MissingImages[itemName].count + 1
+    MissingImages[itemName].lastReported = os.time()
+    
+    print(('[Auction] Missing image reported: %s (%s) by player %s'):format(
+        itemName, imageUrl, playerSrc or 'unknown'
+    ))
+end
+
+local function saveAuctions()
+    local saveData = {
+        auctions = Auctions,
+        escrow = Escrow,
+        bidHistory = BidHistory,
+        pendingPayouts = PendingPayouts
+    }
+    SaveResourceFile(GetCurrentResourceName(), SAVE_FILE, json.encode(saveData, { indent = true }), -1)
+end
+
+local function loadAuctions()
+    local fileData = LoadResourceFile(GetCurrentResourceName(), SAVE_FILE)
+    if fileData then
+        local decoded = json.decode(fileData)
+        if decoded then
+            Auctions = decoded.auctions or {}
+            Escrow = decoded.escrow or { items = {}, funds = {} }
+            BidHistory = decoded.bidHistory or {}
+            PendingPayouts = decoded.pendingPayouts or {}
+            
+            -- Backfill images for existing auctions
+            for auctionId, auction in pairs(Auctions) do
+                if auction.item and not auction.item.image then
+                    auction.item.image = getItemImage(auction.item.name)
+                end
+                -- Backfill image metadata for existing auctions
+                if auction.item and not auction.item.imageMeta then
+                    auction.item.imageMeta = buildImageMetadata(auction.item.name)
+                end
+            end
+            
+            -- Restart timers for active auctions
+            for auctionId, auction in pairs(Auctions) do
+                if auction.status == 'active' then
+                    local remaining = auction.endTime - os.time()
+                    if remaining > 0 then
+                        AuctionEndTimers[auctionId] = SetTimeout(remaining * 1000, function()
+                            endAuction(auctionId)
+                        end)
+                    else
+                        -- Auction should have ended
+                        endAuction(auctionId)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================
+-- FRAMEWORK INITIALIZATION
+-- ============================================
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    print('[Auction System] RSGCore loaded on server')
+    loadAuctions()
+end)
+
+-- ============================================
+-- RSG FRAMEWORK INTEGRATION
+-- ============================================
+
+local function getPlayer(src)
+    if not RSGCore then return nil end
+    return RSGCore.Functions.GetPlayer(src)
+end
+
+local function getPlayerInventory(src)
+    local Player = getPlayer(src)
+    if not Player then return nil end
+    return Player.PlayerData.items
+end
+
+local function removePlayerItem(src, itemName, count)
+    local Player = getPlayer(src)
+    if not Player then return false end
+    
+    local item = Player.Functions.GetItemByName(itemName)
+    if not item or item.amount < count then return false end
+    
+    Player.Functions.RemoveItem(itemName, count)
+    return true
+end
+
+local function addPlayerItem(src, itemName, count, metadata)
+    local Player = getPlayer(src)
+    if not Player then return false end
+    
+    Player.Functions.AddItem(itemName, count, false, metadata)
+    return true
+end
+
+local function getPlayerMoney(src)
+    local Player = getPlayer(src)
+    if not Player then return 0, 0 end
+    
+    local money = Player.PlayerData.money
+    return money['cash'] or 0, money['bank'] or 0
+end
+
+local function removePlayerMoney(src, amount)
+    local Player = getPlayer(src)
+    if not Player then return false end
+    
+    local cash, bank = getPlayerMoney(src)
+    if cash >= amount then
+        Player.Functions.RemoveMoney('cash', amount)
+        return true
+    elseif cash + bank >= amount then
+        Player.Functions.RemoveMoney('cash', cash)
+        Player.Functions.RemoveMoney('bank', amount - cash)
+        return true
+    end
+    return false
+end
+
+local function addPlayerMoney(src, amount)
+    local Player = getPlayer(src)
+    if not Player then return false end
+    
+    Player.Functions.AddMoney('bank', amount)
+    return true
+end
+
+local function getPlayerInfo(src)
+    local Player = getPlayer(src)
+    if not Player then return nil end
+    
+    return {
+        id = src,
+        name = Player.PlayerData.charinfo.firstname .. ' ' .. Player.PlayerData.charinfo.lastname,
+        citizenid = Player.PlayerData.citizenid
+    }
+end
+
+local function hasItem(src, itemName, count)
+    local Player = getPlayer(src)
+    if not Player then return false end
+    
+    local item = Player.Functions.GetItemByName(itemName)
+    if not item then return false end
+    
+    return item.amount >= count
+end
+
+-- Check if player has an active auction for this item
+local function hasActiveAuctionForItem(citizenid, itemName)
+    for auctionId, auction in pairs(Auctions) do
+        if auction.status == 'active' 
+            and auction.owner.citizenid == citizenid 
+            and auction.item.name == itemName then
+            return auction
+        end
+    end
+    return nil
+end
+
+-- Check if an item is blacklisted from auctions
+local function isItemBlacklisted(itemName)
+    if not Config.BlacklistedItems or #Config.BlacklistedItems == 0 then
+        return false
+    end
+    
+    for _, blacklistedItem in ipairs(Config.BlacklistedItems) do
+        if blacklistedItem == itemName then
+            return true
+        end
+    end
+    return false
+end
+
+-- ============================================
+-- PENDING PAYOUT SYSTEM
+-- ============================================
+
+local function queueMoneyPayout(citizenid, amount, reason)
+    if not PendingPayouts[citizenid] then
+        PendingPayouts[citizenid] = { money = 0, items = {} }
+    end
+    PendingPayouts[citizenid].money = PendingPayouts[citizenid].money + amount
+    print(('[Auction] Queued $%d money payout for %s (%s)'):format(amount, citizenid, reason or 'unknown'))
+    saveAuctions()
+end
+
+local function queueItemPayout(citizenid, itemName, count, metadata, auctionId)
+    if not PendingPayouts[citizenid] then
+        PendingPayouts[citizenid] = { money = 0, items = {} }
+    end
+    table.insert(PendingPayouts[citizenid].items, {
+        itemName = itemName,
+        count = count,
+        metadata = metadata,
+        auctionId = auctionId
+    })
+    print(('[Auction] Queued item %s x%d for %s'):format(itemName, count, citizenid))
+    saveAuctions()
+end
+
+local function deliverPendingPayouts(src)
+    local Player = getPlayer(src)
+    if not Player then return end
+    
+    local citizenid = Player.PlayerData.citizenid
+    local payout = PendingPayouts[citizenid]
+    
+    if not payout then return end
+    
+    local delivered = false
+    
+    -- Deliver money
+    if payout.money and payout.money > 0 then
+        addPlayerMoney(src, payout.money)
+        TriggerClientEvent('auction:client:notification', src, {
+            type = 'payoutMoney',
+            amount = payout.money
+        })
+        print(('[Auction] Delivered $%d to %s'):format(payout.money, citizenid))
+        delivered = true
+    end
+    
+    -- Deliver items
+    for _, item in ipairs(payout.items) do
+        addPlayerItem(src, item.itemName, item.count, item.metadata)
+        TriggerClientEvent('auction:client:notification', src, {
+            type = 'payoutItem',
+            itemName = item.itemName,
+            count = item.count
+        })
+        print(('[Auction] Delivered %s x%d to %s'):format(item.itemName, item.count, citizenid))
+        delivered = true
+    end
+    
+    -- Clear delivered payouts
+    if delivered then
+        PendingPayouts[citizenid] = nil
+        saveAuctions()
+    end
+end
+
+-- ============================================
+-- AUCTION CORE FUNCTIONS
+-- ============================================
+
+local function createAuction(src, itemData)
+    local playerInfo = getPlayerInfo(src)
+    if not playerInfo then
+        return { success = false, error = 'Player not found' }
+    end
+    
+    -- Check for duplicate auction (same owner + same item)
+    local existingAuction = hasActiveAuctionForItem(playerInfo.citizenid, itemData.itemName)
+    if existingAuction then
+        print(('[Auction] Duplicate rejected: %s (%s) already has active auction %s for item %s'):format(
+            playerInfo.name, playerInfo.citizenid, existingAuction.id, itemData.itemName
+        ))
+        return { success = false, error = 'You already have an active auction for this item', existingAuctionId = existingAuction.id }
+    end
+    
+    -- Check if item is blacklisted
+    if isItemBlacklisted(itemData.itemName) then
+        print(('[Auction] Blacklisted item rejected: %s (%s) tried to auction %s'):format(
+            playerInfo.name, playerInfo.citizenid, itemData.itemName
+        ))
+        return { success = false, error = 'This item cannot be auctioned' }
+    end
+    
+    -- Validate item ownership
+    if not hasItem(src, itemData.itemName, itemData.count) then
+        return { success = false, error = 'You do not have this item' }
+    end
+    
+    -- Validate auction parameters
+    if itemData.startingBid < 1 then
+        return { success = false, error = 'Starting bid must be at least $1' }
+    end
+    
+    local minDuration = 60       -- 1 minute minimum for testing
+    local maxDuration = 604800   -- 7 days maximum
+    local duration = math.min(math.max(itemData.duration or 3600, minDuration), maxDuration)
+    
+    -- Remove item from inventory (escrow)
+    if not removePlayerItem(src, itemData.itemName, itemData.count) then
+        return { success = false, error = 'Failed to remove item from inventory' }
+    end
+    
+    local auctionId = generateAuctionId()
+    local now = os.time()
+    
+    -- Use client-provided image or generate from item name
+    local imageUrl = itemData.image or getItemImage(itemData.itemName)
+    
+    local auction = {
+        id = auctionId,
+        owner = {
+            id = src,
+            name = playerInfo.name,
+            citizenid = playerInfo.citizenid
+        },
+        item = {
+            name = itemData.itemName,
+            label = itemData.itemLabel or itemData.itemName,
+            count = itemData.count,
+            metadata = itemData.metadata or {},
+            image = imageUrl,
+            imageMeta = buildImageMetadata(itemData.itemName)
+        },
+        startingBid = itemData.startingBid,
+        currentBid = 0,
+        highestBidder = nil,
+        endTime = now + duration,
+        createdAt = now,
+        status = 'active',
+        totalBids = 0
+    }
+    
+    Auctions[auctionId] = auction
+    Escrow.items[auctionId] = {
+        itemName = itemData.itemName,
+        count = itemData.count,
+        metadata = itemData.metadata or {},
+        owner = src,
+        ownerCitizenid = playerInfo.citizenid
+    }
+    BidHistory[auctionId] = {}
+    
+    -- Set end timer
+    AuctionEndTimers[auctionId] = SetTimeout(duration * 1000, function()
+        endAuction(auctionId)
+    end)
+    
+    saveAuctions()
+    
+    -- Send webhook notification
+    SendWebhook('auctionCreated', {
+        auctionId = auctionId,
+        itemName = auction.item.name,
+        itemLabel = auction.item.label,
+        count = auction.item.count,
+        startingBid = auction.startingBid,
+        sellerName = playerInfo.name,
+        duration = duration
+    })
+    
+    -- Broadcast new auction to all players
+    broadcastToAll('auctionCreated', auction)
+    
+    return { success = true, auction = auction }
+end
+
+local function placeBid(src, auctionId, bidAmount)
+    local playerInfo = getPlayerInfo(src)
+    if not playerInfo then
+        return { success = false, error = 'Player not found' }
+    end
+    
+    local auction = Auctions[auctionId]
+    if not auction then
+        return { success = false, error = 'Auction not found' }
+    end
+    
+    if auction.status ~= 'active' then
+        return { success = false, error = 'This auction has ended' }
+    end
+    
+    -- Check if auction ended
+    if os.time() >= auction.endTime then
+        endAuction(auctionId)
+        return { success = false, error = 'This auction has ended' }
+    end
+    
+    -- Owner cannot bid on own auction
+    if auction.owner.citizenid == playerInfo.citizenid then
+        return { success = false, error = 'You cannot bid on your own auction' }
+    end
+    
+    -- Validate bid amount
+    local minBid = auction.currentBid > 0 and auction.currentBid * 1.05 or auction.startingBid
+    minBid = math.floor(minBid)
+    
+    if bidAmount < minBid then
+        return { success = false, error = 'Minimum bid is $' .. minBid, minBid = minBid }
+    end
+    
+    -- Check if player has enough money
+    local cash, bank = getPlayerMoney(src)
+    local totalAvailable = cash + bank
+    
+    -- Check how much is already in escrow for this auction
+    local previousBid = 0
+    if Escrow.funds[auctionId] and Escrow.funds[auctionId][playerInfo.citizenid] then
+        previousBid = Escrow.funds[auctionId][playerInfo.citizenid]
+    end
+    
+    local additionalFundsNeeded = bidAmount - previousBid
+    
+    if totalAvailable < additionalFundsNeeded then
+        return { success = false, error = 'Insufficient funds', minBid = minBid }
+    end
+    
+    -- Handle previous highest bidder refund
+    if auction.highestBidder and auction.highestBidder.citizenid ~= playerInfo.citizenid then
+        -- Notify previous bidder they were outbid
+        local prevBidder = auction.highestBidder.id
+        local prevBidderCitizenid = auction.highestBidder.citizenid
+        
+        -- Return funds to previous bidder (remove from escrow)
+        if Escrow.funds[auctionId] and Escrow.funds[auctionId][prevBidderCitizenid] then
+            local refundAmount = Escrow.funds[auctionId][prevBidderCitizenid]
+            Escrow.funds[auctionId][prevBidderCitizenid] = nil
+            
+            -- Find the previous bidder's server ID
+            for _, p in ipairs(GetPlayers()) do
+                local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+                if pPlayer and pPlayer.PlayerData.citizenid == prevBidderCitizenid then
+                    addPlayerMoney(tonumber(p), refundAmount)
+                    TriggerClientEvent('auction:client:notification', tonumber(p), {
+                        type = 'outbid',
+                        auctionId = auctionId,
+                        itemName = auction.item.label,
+                        newHighBid = bidAmount
+                    })
+                    break
+                end
+            end
+        end
+    end
+    
+    -- Remove additional funds from player
+    if additionalFundsNeeded > 0 then
+        if not removePlayerMoney(src, additionalFundsNeeded) then
+            return { success = false, error = 'Failed to process payment' }
+        end
+    end
+    
+    -- Add to escrow
+    if not Escrow.funds[auctionId] then
+        Escrow.funds[auctionId] = {}
+    end
+    Escrow.funds[auctionId][playerInfo.citizenid] = bidAmount
+    
+    -- Update auction
+    local previousHighest = auction.highestBidder
+    auction.currentBid = bidAmount
+    auction.highestBidder = {
+        id = src,
+        name = playerInfo.name,
+        citizenid = playerInfo.citizenid
+    }
+    auction.totalBids = auction.totalBids + 1
+    
+    -- Add to bid history
+    table.insert(BidHistory[auctionId], 1, {
+        playerId = src,
+        playerName = playerInfo.name,
+        citizenid = playerInfo.citizenid,
+        amount = bidAmount,
+        timestamp = os.time()
+    })
+    
+    saveAuctions()
+    
+    -- Send webhook notification
+    SendWebhook('bidPlaced', {
+        auctionId = auctionId,
+        itemLabel = auction.item.label,
+        bidAmount = bidAmount,
+        previousBid = previousBid,
+        bidderName = playerInfo.name,
+        totalBids = auction.totalBids
+    })
+    
+    -- Broadcast bid update
+    broadcastToAll('bidPlaced', {
+        auctionId = auctionId,
+        currentBid = bidAmount,
+        highestBidder = {
+            name = playerInfo.name,
+            citizenid = playerInfo.citizenid
+        },
+        totalBids = auction.totalBids,
+        bidHistory = BidHistory[auctionId]
+    })
+    
+    return { success = true, auction = auction }
+end
+
+function endAuction(auctionId)
+    local auction = Auctions[auctionId]
+    if not auction then return end
+    
+    -- Clear timer
+    if AuctionEndTimers[auctionId] then
+        ClearTimeout(AuctionEndTimers[auctionId])
+        AuctionEndTimers[auctionId] = nil
+    end
+    
+    auction.status = 'ended'
+    
+    -- Determine outcome
+    if auction.highestBidder then
+        -- Winner found
+        local winnerCitizenid = auction.highestBidder.citizenid
+        local winAmount = auction.currentBid
+        
+        -- Transfer funds to seller (from escrow)
+        local sellerCitizenid = auction.owner.citizenid
+        
+        -- Find winner and seller server IDs
+        local winnerServerId, sellerServerId
+        for _, p in ipairs(GetPlayers()) do
+            local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+            if pPlayer then
+                if pPlayer.PlayerData.citizenid == winnerCitizenid then
+                    winnerServerId = tonumber(p)
+                end
+                if pPlayer.PlayerData.citizenid == sellerCitizenid then
+                    sellerServerId = tonumber(p)
+                end
+            end
+        end
+        
+        -- Give item to winner (online or queue for offline)
+        local itemData = Escrow.items[auctionId]
+        if itemData then
+            if winnerServerId then
+                -- Winner online - give item now
+                addPlayerItem(winnerServerId, itemData.itemName, itemData.count, itemData.metadata)
+                TriggerClientEvent('auction:client:notification', winnerServerId, {
+                    type = 'won',
+                    auctionId = auctionId,
+                    itemName = auction.item.label,
+                    count = auction.item.count,
+                    amount = winAmount
+                })
+            else
+                -- Winner offline - queue item for later
+                queueItemPayout(winnerCitizenid, itemData.itemName, itemData.count, itemData.metadata, auctionId)
+            end
+            
+            -- Give money to seller (online or queue for offline)
+            if sellerServerId then
+                -- Seller online - give money now
+                addPlayerMoney(sellerServerId, winAmount)
+                TriggerClientEvent('auction:client:notification', sellerServerId, {
+                    type = 'sold',
+                    auctionId = auctionId,
+                    itemName = auction.item.label,
+                    count = auction.item.count,
+                    amount = winAmount
+                })
+            else
+                -- Seller offline - queue money for later
+                queueMoneyPayout(sellerCitizenid, winAmount, 'auction sale: ' .. auctionId)
+            end
+            
+            Escrow.items[auctionId] = nil
+        end
+        
+        auction.winner = auction.highestBidder
+        auction.soldFor = winAmount
+        
+        -- Send webhook notification for won auction
+        SendWebhook('auctionWon', {
+            auctionId = auctionId,
+            itemName = auction.item.name,
+            itemLabel = auction.item.label,
+            count = auction.item.count,
+            finalPrice = winAmount,
+            winnerName = auction.highestBidder.name,
+            sellerName = auction.owner.name,
+            totalBids = auction.totalBids
+        })
+    else
+        -- No bids - return item to owner
+        local itemData = Escrow.items[auctionId]
+        local ownerCitizenid = auction.owner.citizenid
+        
+        -- Send webhook notification for expired auction
+        SendWebhook('auctionExpired', {
+            auctionId = auctionId,
+            itemName = auction.item.name,
+            itemLabel = auction.item.label,
+            count = auction.item.count,
+            startingBid = auction.startingBid,
+            sellerName = auction.owner.name
+        })
+        
+        local ownerServerId
+        for _, p in ipairs(GetPlayers()) do
+            local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+            if pPlayer and pPlayer.PlayerData.citizenid == ownerCitizenid then
+                ownerServerId = tonumber(p)
+                break
+            end
+        end
+        
+        if ownerServerId then
+            -- Owner online - return item now
+            addPlayerItem(ownerServerId, itemData.itemName, itemData.count, itemData.metadata)
+            TriggerClientEvent('auction:client:notification', ownerServerId, {
+                type = 'expired',
+                auctionId = auctionId,
+                itemName = auction.item.label,
+                count = auction.item.count
+            })
+        else
+            -- Owner offline - queue item return for later
+            queueItemPayout(ownerCitizenid, itemData.itemName, itemData.count, itemData.metadata, auctionId)
+        end
+        
+        Escrow.items[auctionId] = nil
+    end
+    
+    -- Clear escrow funds
+    Escrow.funds[auctionId] = nil
+    
+    saveAuctions()
+    
+    -- Broadcast auction ended
+    broadcastToAll('auctionEnded', {
+        auctionId = auctionId,
+        winner = auction.winner,
+        soldFor = auction.soldFor,
+        status = auction.status
+    })
+end
+
+local function cancelAuction(src, auctionId)
+    local playerInfo = getPlayerInfo(src)
+    if not playerInfo then
+        return { success = false, error = 'Player not found' }
+    end
+    
+    local auction = Auctions[auctionId]
+    if not auction then
+        return { success = false, error = 'Auction not found' }
+    end
+    
+    -- Verify ownership
+    if auction.owner.citizenid ~= playerInfo.citizenid then
+        return { success = false, error = 'You can only cancel your own auctions' }
+    end
+    
+    if auction.status ~= 'active' then
+        return { success = false, error = 'This auction cannot be cancelled' }
+    end
+    
+    -- Check for bids
+    if auction.totalBids > 0 then
+        return { success = false, error = 'Cannot cancel auction with existing bids' }
+    end
+    
+    -- Clear timer
+    if AuctionEndTimers[auctionId] then
+        ClearTimeout(AuctionEndTimers[auctionId])
+        AuctionEndTimers[auctionId] = nil
+    end
+    
+    -- Return item to owner
+    local itemData = Escrow.items[auctionId]
+    if itemData then
+        addPlayerItem(src, itemData.itemName, itemData.count, itemData.metadata)
+        Escrow.items[auctionId] = nil
+    end
+    
+    auction.status = 'cancelled'
+    saveAuctions()
+    
+    -- Send webhook notification
+    SendWebhook('auctionCancelled', {
+        auctionId = auctionId,
+        itemName = auction.item.name,
+        itemLabel = auction.item.label,
+        count = auction.item.count,
+        startingBid = auction.startingBid,
+        sellerName = playerInfo.name,
+        reason = 'Cancelled by seller'
+    })
+    
+    -- Broadcast cancellation
+    broadcastToAll('auctionCancelled', { auctionId = auctionId })
+    
+    return { success = true }
+end
+
+-- ============================================
+-- EVENTS
+-- ============================================
+
+RegisterNetEvent('auction:server:getAuctions', function()
+    local src = source
+    local auctionList = {}
+    
+    for id, auction in pairs(Auctions) do
+        if auction.status == 'active' then
+            table.insert(auctionList, auction)
+        end
+    end
+    
+    -- Sort by end time (ending soonest first)
+    table.sort(auctionList, function(a, b)
+        return a.endTime < b.endTime
+    end)
+    
+    TriggerClientEvent('auction:client:receiveAuctions', src, {
+        auctions = auctionList,
+        bidHistory = BidHistory
+    })
+end)
+
+RegisterNetEvent('auction:server:createAuction', function(data)
+    local src = source
+    local result = createAuction(src, data)
+    TriggerClientEvent('auction:client:createResult', src, result)
+end)
+
+RegisterNetEvent('auction:server:placeBid', function(auctionId, amount)
+    local src = source
+    local result = placeBid(src, auctionId, amount)
+    TriggerClientEvent('auction:client:bidResult', src, result)
+end)
+
+RegisterNetEvent('auction:server:cancelAuction', function(auctionId)
+    local src = source
+    local result = cancelAuction(src, auctionId)
+    TriggerClientEvent('auction:client:cancelResult', src, result)
+end)
+
+RegisterNetEvent('auction:server:getPlayerAuctions', function()
+    local src = source
+    local playerInfo = getPlayerInfo(src)
+    if not playerInfo then return end
+    
+    local playerAuctions = {}
+    
+    for id, auction in pairs(Auctions) do
+        if auction.owner.citizenid == playerInfo.citizenid then
+            table.insert(playerAuctions, auction)
+        end
+    end
+    
+    TriggerClientEvent('auction:client:receivePlayerAuctions', src, { auctions = playerAuctions })
+end)
+
+-- Client reports missing image
+RegisterNetEvent('auction:server:reportMissingImage', function(itemName, imageUrl)
+    local src = source
+    logMissingImage(itemName, imageUrl, src)
+end)
+
+-- ============================================
+-- NPC INTERACTION VALIDATION
+-- ============================================
+
+RegisterNetEvent('auction:server:validateNPCInteraction', function(data)
+    local src = source
+    
+    -- Validate player exists
+    local playerInfo = getPlayerInfo(src)
+    if not playerInfo then
+        print(('[Auction NPC] Validation failed: Player not found (source: %s)'):format(src))
+        return
+    end
+    
+    -- Validate NPC index is configured
+    local npcIndex = data and data.npcIndex
+    if not npcIndex or not Config.AuctioneerNPCs or not Config.AuctioneerNPCs[npcIndex] then
+        print(('[Auction NPC] Validation failed: Invalid NPC index %s from player %s'):format(
+            tostring(npcIndex), playerInfo.name
+        ))
+        return
+    end
+    
+    local npcConfig = Config.AuctioneerNPCs[npcIndex]
+    
+    if Config.Debug then
+        print(('[Auction NPC] Validated interaction: %s (%s) with %s'):format(
+            playerInfo.name, playerInfo.citizenid, npcConfig.name or 'NPC'
+        ))
+    end
+    
+    -- Validation passed - tell client to open UI
+    TriggerClientEvent('auction:client:openFromNPC', src)
+end)
+
+-- ============================================
+-- CLEANUP
+-- ============================================
+
+-- Cleanup on resource stop
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() == resourceName then
+        saveAuctions()
+        print('[Auction System] Saved auctions to storage')
+    end
+end)
+
+-- ============================================
+-- PLAYER LOADED - DELIVER PENDING PAYOUTS
+-- ============================================
+
+-- RSGCore player loaded event
+AddEventHandler('RSGCore:Server:PlayerLoaded', function(Player)
+    if not Player then return end
+    local src = Player.PlayerData.source
+    -- Delay slightly to ensure player is fully loaded
+    SetTimeout(1000, function()
+        deliverPendingPayouts(src)
+    end)
+end)
+
+-- Also check on resource restart for already-online players
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    -- Check all online players for pending payouts
+    SetTimeout(2000, function()
+        for _, p in ipairs(GetPlayers()) do
+            deliverPendingPayouts(tonumber(p))
+        end
+    end)
+end)
