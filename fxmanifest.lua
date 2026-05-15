@@ -2,9 +2,9 @@ fx_version 'cerulean'
 rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aware my resources *will* become incompatible once RedM ships.'
 game 'rdr3'
 
-author 'RexShack Gaming'
+author 'RexShack'
 description 'Real-time auction system for RSG Framework'
-version '2.0.0'
+version '2.0.1'
 
 ui_page 'web/dist/index.html'
 

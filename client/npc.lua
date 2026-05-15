@@ -7,6 +7,18 @@ local SpawnedNPCs = {}  -- [npcIndex] = { entity, coords, heading, data }
 local TARGET_OPTION_NAME = 'auction_npc_interact'
 
 -- ============================================
+-- BLIPS
+-- ============================================
+CreateThread(function()
+    for _, v in pairs(Config.AuctioneerNPCs) do
+        local AuctionBlip = BlipAddForCoords(1664425300, v.coords)
+        SetBlipSprite(AuctionBlip, `blip_shop_store`, true)
+        SetBlipScale(AuctionBlip, 0.2)
+         SetBlipName(AuctionBlip, 'Auction House')
+    end
+end)
+
+-- ============================================
 -- NPC SPAWNING
 -- ============================================
 
