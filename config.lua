@@ -13,8 +13,12 @@ Config = {
     -- Item Blacklist
     -- Items in this list cannot be auctioned by players
     BlacklistedItems = {
-        -- Example: 'money', 'black_money', 'locked_item'
-        -- Add item names (not labels) to block them from auctions
+        'dollar',
+        'cent',
+        'blood_dollar',
+        'blood_cent',
+        'money_clip',
+        'blood_money_clip',
     },
     
     -- NPC Auctioneers
