@@ -4,7 +4,7 @@ game 'rdr3'
 
 author 'RexShack'
 description 'Real-time auction system for RSG Framework'
-version '2.0.2'
+version '2.0.3'
 
 ui_page 'web/dist/index.html'
 
