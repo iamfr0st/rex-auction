@@ -215,8 +215,8 @@ Config.Webhooks = {
 
 | Command | Description |
 |---------|-------------|
-| `/auction` | Open/close the auction UI : commented out by default |
-| `/auctions` | Alias for `/auction` : commented out by default |
+| `/auction` | Open/close the auction UI |
+| `/auctions` | Alias for `/auction` |
 
 ### Player Actions
 

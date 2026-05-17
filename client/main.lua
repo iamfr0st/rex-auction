@@ -113,13 +113,17 @@ function NUI.Open(data)
         bank = PlayerData.money['bank'] or 0
     end
     
+    -- Get fee configuration
+    local feeConfig = Config.CreationFee or {}
+    
     SetNuiFocus(true, true)
     NUI.SendMessage('open', {
         inventory = inventory,
         cash = cash,
         bank = bank,
         citizenid = PlayerData.citizenid,
-        playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown'
+        playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown',
+        feeConfig = feeConfig
     })
     
     -- Request current auctions
@@ -205,6 +209,11 @@ end)
 
 RegisterNuiCallback('getPlayerAuctions', function(_, cb)
     TriggerServerEvent('auction:server:getPlayerAuctions')
+    cb({ success = true })
+end)
+
+RegisterNuiCallback('calculateFeePreview', function(data, cb)
+    TriggerServerEvent('auction:server:calculateFeePreview', data)
     cb({ success = true })
 end)
 
@@ -302,6 +311,11 @@ end)
 RegisterNetEvent('auction:client:receivePlayerAuctions', function(data)
     if not isOpen then return end
     NUI.SendMessage('receivePlayerAuctions', data)
+end)
+
+RegisterNetEvent('auction:client:feePreview', function(data)
+    if not isOpen then return end
+    NUI.SendMessage('feePreview', data)
 end)
 
 -- Webhook admin command results

@@ -10,15 +10,22 @@ Config = {
     -- Bid Settings
     MinBidIncrement = 0.05,     -- 5% minimum increase over current bid
     
+    -- Auction Creation Fee Settings
+    -- Fee formula: BaseFee + (DurationMultiplier * hours) + (QuantityMultiplier * quantity)
+    CreationFee = {
+        enabled = true,              -- Enable/disable creation fees
+        baseFee = 5,                 -- Base fee for any auction
+        durationMultiplier = 2,      -- Fee per hour of duration
+        quantityMultiplier = 0.50,   -- Fee per item quantity
+        maxFee = 500,                -- Maximum fee cap
+        minFee = 5,                  -- Minimum fee (base fee)
+    },
+    
     -- Item Blacklist
     -- Items in this list cannot be auctioned by players
     BlacklistedItems = {
-        'dollar',
-        'cent',
-        'blood_dollar',
-        'blood_cent',
-        'money_clip',
-        'blood_money_clip',
+        -- Example: 'money', 'black_money', 'locked_item'
+        -- Add item names (not labels) to block them from auctions
     },
     
     -- NPC Auctioneers

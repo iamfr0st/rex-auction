@@ -69,6 +69,33 @@ interface PlayerData {
   bank: number;
   citizenid: string;
   playerName: string;
+  feeConfig?: FeeConfig;
+}
+
+interface FeeConfig {
+  enabled: boolean;
+  baseFee: number;
+  durationMultiplier: number;
+  quantityMultiplier: number;
+  maxFee: number;
+  minFee: number;
+}
+
+interface FeeBreakdown {
+  enabled: boolean;
+  baseFee: number;
+  durationFee: number;
+  quantityFee: number;
+  total: number;
+  maxFee?: number;
+  minFee?: number;
+  wasCapped?: boolean;
+}
+
+interface FeePreview {
+  breakdown: FeeBreakdown;
+  playerFunds: number;
+  canAfford: boolean;
 }
 
 // Image cache for tracking loaded images across components
@@ -317,18 +344,23 @@ function CreateAuctionForm({
   inventory, 
   onCreate, 
   onClose,
-  isSubmitting
+  isSubmitting,
+  feeConfig,
+  playerFunds
 }: { 
   inventory: InventoryItem[]; 
   onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number }) => void;
   onClose: () => void;
   isSubmitting: boolean;
+  feeConfig?: FeeConfig;
+  playerFunds: number;
 }) {
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [count, setCount] = useState(1);
   const [startingBid, setStartingBid] = useState(100);
   const [duration, setDuration] = useState(3600);
   const [searchQuery, setSearchQuery] = useState('');
+  const [feePreview, setFeePreview] = useState<FeePreview | null>(null);
 
   const filteredInventory = useMemo(() => {
     if (!searchQuery) return inventory;
@@ -337,9 +369,44 @@ function CreateAuctionForm({
     );
   }, [inventory, searchQuery]);
 
+  // Calculate local fee preview (client-side for responsiveness)
+  const localFeePreview = useMemo(() => {
+    if (!feeConfig || !feeConfig.enabled) {
+      return { enabled: false, total: 0, baseFee: 0, durationFee: 0, quantityFee: 0 };
+    }
+
+    const baseFee = feeConfig.baseFee || 5;
+    const durationMultiplier = feeConfig.durationMultiplier || 2;
+    const quantityMultiplier = feeConfig.quantityMultiplier || 0.5;
+    const maxFee = feeConfig.maxFee || 500;
+    const minFee = feeConfig.minFee || 5;
+
+    const durationHours = duration / 3600;
+    const durationFee = durationMultiplier * durationHours;
+    const quantityFee = quantityMultiplier * count;
+    const totalFee = baseFee + durationFee + quantityFee;
+
+    const cappedFee = Math.max(minFee, Math.min(maxFee, totalFee));
+    const wasCapped = totalFee > maxFee;
+
+    return {
+      enabled: true,
+      baseFee,
+      durationFee: Math.floor(durationFee * 100) / 100,
+      quantityFee: Math.floor(quantityFee * 100) / 100,
+      total: Math.floor(cappedFee),
+      maxFee,
+      minFee,
+      wasCapped
+    };
+  }, [feeConfig, duration, count]);
+
+  const canAffordFee = playerFunds >= localFeePreview.total;
+
   const handleSubmit = (e: import('react').FormEvent) => {
     e.preventDefault();
     if (!selectedItem || count < 1 || startingBid < 1) return;
+    if (!canAffordFee) return;
     onCreate({
       itemName: selectedItem.name,
       count,
@@ -465,6 +532,48 @@ function CreateAuctionForm({
               </select>
             </div>
 
+            {/* Fee Breakdown */}
+            {localFeePreview.enabled && (
+              <div className={`rounded-lg p-4 border ${
+                canAffordFee 
+                  ? 'bg-stone-800/50 border-stone-700' 
+                  : 'bg-red-950/50 border-red-800'
+              }`}>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-stone-400 text-xs uppercase tracking-wide">Creation Fee</h4>
+                  <span className={`text-lg font-bold ${canAffordFee ? 'text-amber-400' : 'text-red-400'}`}>
+                    ${localFeePreview.total}
+                  </span>
+                </div>
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-stone-500">Base fee</span>
+                    <span className="text-stone-300">${localFeePreview.baseFee}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-stone-500">Duration ({(duration / 3600).toFixed(1)} hrs × ${feeConfig?.durationMultiplier || 2})</span>
+                    <span className="text-stone-300">${localFeePreview.durationFee.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-stone-500">Quantity ({count} × ${feeConfig?.quantityMultiplier || 0.5})</span>
+                    <span className="text-stone-300">${localFeePreview.quantityFee.toFixed(2)}</span>
+                  </div>
+                  {localFeePreview.wasCapped && (
+                    <div className="flex justify-between text-amber-400">
+                      <span>Fee capped at max</span>
+                      <span>${localFeePreview.maxFee}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="mt-3 pt-3 border-t border-stone-700/50 flex justify-between text-xs">
+                  <span className="text-stone-500">Your funds</span>
+                  <span className={canAffordFee ? 'text-emerald-400' : 'text-red-400'}>
+                    ${playerFunds.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Summary */}
             <div className="bg-stone-800/50 rounded-lg p-4 border border-stone-700">
               <h4 className="text-stone-400 text-xs uppercase tracking-wide mb-3">Auction Summary</h4>
@@ -481,20 +590,31 @@ function CreateAuctionForm({
                   <span className="text-stone-400">Duration</span>
                   <span className="text-white">{durationOptions.find(o => o.value === duration)?.label}</span>
                 </div>
+                {localFeePreview.enabled && (
+                  <div className="flex justify-between">
+                    <span className="text-stone-400">Creation Fee</span>
+                    <span className={canAffordFee ? 'text-amber-400' : 'text-red-400'}>${localFeePreview.total}</span>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Submit */}
             <button
               type="submit"
-              disabled={isSubmitting}
+              disabled={isSubmitting || !canAffordFee}
               className={`w-full font-semibold py-3 rounded-lg transition-colors ${
-                isSubmitting 
+                isSubmitting || !canAffordFee
                   ? 'bg-stone-700 text-stone-400 cursor-not-allowed' 
                   : 'bg-amber-700 hover:bg-amber-600 text-white'
               }`}
             >
-              {isSubmitting ? 'Creating...' : 'Create Auction'}
+              {!canAffordFee 
+                ? `Insufficient Funds (Need $${localFeePreview.total})`
+                : isSubmitting 
+                  ? 'Creating...' 
+                  : `Create Auction ($${localFeePreview.total} fee)`
+              }
             </button>
           </>
         )}
@@ -855,6 +975,11 @@ export default function App() {
     setPlayerData(prev => ({ ...prev, inventory: data.inventory }));
   });
 
+  useNuiEvent('feePreview', (data: FeePreview) => {
+    // Fee preview is calculated client-side for responsiveness
+    // This handler is available for server-side validation if needed
+  });
+
   // NUI Actions
   const handleClose = useCallback(() => {
     setVisible(false);
@@ -897,7 +1022,15 @@ export default function App() {
         cash: 500,
         bank: 2500,
         citizenid: 'player1',
-        playerName: 'Test Player'
+        playerName: 'Test Player',
+        feeConfig: {
+          enabled: true,
+          baseFee: 5,
+          durationMultiplier: 2,
+          quantityMultiplier: 0.5,
+          maxFee: 500,
+          minFee: 5
+        }
       });
 
       setAuctions([
@@ -1097,6 +1230,8 @@ export default function App() {
               onCreate={handleCreateAuction}
               onClose={() => setView('list')}
               isSubmitting={isSubmitting}
+              feeConfig={playerData.feeConfig}
+              playerFunds={playerData.cash + playerData.bank}
             />
           )}
 

@@ -235,6 +235,84 @@ local function isItemBlacklisted(itemName)
 end
 
 -- ============================================
+-- AUCTION CREATION FEE SYSTEM
+-- ============================================
+
+-- Calculate creation fee based on duration and quantity
+-- Formula: BaseFee + (DurationMultiplier * hours) + (QuantityMultiplier * quantity)
+local function calculateCreationFee(durationSeconds, quantity)
+    local feeConfig = Config.CreationFee
+    
+    -- If fees disabled, return 0
+    if not feeConfig or not feeConfig.enabled then
+        return 0
+    end
+    
+    local baseFee = feeConfig.baseFee or 5
+    local durationMultiplier = feeConfig.durationMultiplier or 2
+    local quantityMultiplier = feeConfig.quantityMultiplier or 0.5
+    local maxFee = feeConfig.maxFee or 500
+    local minFee = feeConfig.minFee or 5
+    
+    -- Convert duration to hours
+    local durationHours = durationSeconds / 3600
+    
+    -- Calculate fee components
+    local durationFee = durationMultiplier * durationHours
+    local quantityFee = quantityMultiplier * quantity
+    
+    -- Total fee
+    local totalFee = baseFee + durationFee + quantityFee
+    
+    -- Apply min/max caps
+    totalFee = math.max(minFee, math.min(maxFee, totalFee))
+    
+    -- Round to whole number
+    return math.floor(totalFee)
+end
+
+-- Get fee breakdown for UI preview
+local function getFeeBreakdown(durationSeconds, quantity)
+    local feeConfig = Config.CreationFee
+    
+    if not feeConfig or not feeConfig.enabled then
+        return {
+            enabled = false,
+            total = 0,
+            baseFee = 0,
+            durationFee = 0,
+            quantityFee = 0
+        }
+    end
+    
+    local baseFee = feeConfig.baseFee or 5
+    local durationMultiplier = feeConfig.durationMultiplier or 2
+    local quantityMultiplier = feeConfig.quantityMultiplier or 0.5
+    local maxFee = feeConfig.maxFee or 500
+    local minFee = feeConfig.minFee or 5
+    
+    local durationHours = durationSeconds / 3600
+    local durationFee = durationMultiplier * durationHours
+    local quantityFee = quantityMultiplier * quantity
+    local totalFee = baseFee + durationFee + quantityFee
+    
+    -- Apply caps for display
+    local cappedFee = math.max(minFee, math.min(maxFee, totalFee))
+    local wasCapped = totalFee > maxFee
+    
+    return {
+        enabled = true,
+        baseFee = baseFee,
+        durationFee = math.floor(durationFee * 100) / 100,
+        quantityFee = math.floor(quantityFee * 100) / 100,
+        total = math.floor(cappedFee),
+        maxFee = maxFee,
+        minFee = minFee,
+        wasCapped = wasCapped
+    }
+end
+
+-- ============================================
 -- PENDING PAYOUT SYSTEM
 -- ============================================
 
@@ -343,8 +421,45 @@ local function createAuction(src, itemData)
     local maxDuration = 604800   -- 7 days maximum
     local duration = math.min(math.max(itemData.duration or 3600, minDuration), maxDuration)
     
+    -- Calculate and validate creation fee
+    local creationFee = calculateCreationFee(duration, itemData.count or 1)
+    
+    if Config.CreationFee and Config.CreationFee.enabled and creationFee > 0 then
+        -- Check if player has enough money for fee
+        local cash, bank = getPlayerMoney(src)
+        local totalAvailable = cash + bank
+        
+        if totalAvailable < creationFee then
+            print(('[Auction] Insufficient funds for fee: %s (%s) needs $%d, has $%d'):format(
+                playerInfo.name, playerInfo.citizenid, creationFee, totalAvailable
+            ))
+            return { 
+                success = false, 
+                error = ('Insufficient funds for creation fee: $%d required'):format(creationFee),
+                fee = creationFee,
+                playerFunds = totalAvailable
+            }
+        end
+        
+        -- Deduct fee
+        if not removePlayerMoney(src, creationFee) then
+            print(('[Auction] Failed to deduct fee from %s (%s)'):format(
+                playerInfo.name, playerInfo.citizenid
+            ))
+            return { success = false, error = 'Failed to process creation fee' }
+        end
+        
+        print(('[Auction] Deducted $%d creation fee from %s (%s)'):format(
+            creationFee, playerInfo.name, playerInfo.citizenid
+        ))
+    end
+    
     -- Remove item from inventory (escrow)
     if not removePlayerItem(src, itemData.itemName, itemData.count) then
+        -- Refund fee if item removal fails
+        if creationFee > 0 then
+            addPlayerMoney(src, creationFee)
+        end
         return { success = false, error = 'Failed to remove item from inventory' }
     end
     
@@ -375,7 +490,8 @@ local function createAuction(src, itemData)
         endTime = now + duration,
         createdAt = now,
         status = 'active',
-        totalBids = 0
+        totalBids = 0,
+        creationFee = creationFee
     }
     
     Auctions[auctionId] = auction
@@ -403,13 +519,14 @@ local function createAuction(src, itemData)
         count = auction.item.count,
         startingBid = auction.startingBid,
         sellerName = playerInfo.name,
-        duration = duration
+        duration = duration,
+        creationFee = creationFee
     })
     
     -- Broadcast new auction to all players
     broadcastToAll('auctionCreated', auction)
     
-    return { success = true, auction = auction }
+    return { success = true, auction = auction, creationFee = creationFee }
 end
 
 local function placeBid(src, auctionId, bidAmount)
@@ -805,6 +922,34 @@ RegisterNetEvent('auction:server:getPlayerAuctions', function()
     end
     
     TriggerClientEvent('auction:client:receivePlayerAuctions', src, { auctions = playerAuctions })
+end)
+
+-- Calculate fee preview for UI
+RegisterNetEvent('auction:server:calculateFeePreview', function(data)
+    local src = source
+    
+    -- Validate input
+    local duration = tonumber(data.duration) or 3600
+    local quantity = tonumber(data.quantity) or 1
+    
+    -- Clamp to valid ranges
+    duration = math.min(math.max(duration, 60), 604800)
+    quantity = math.max(1, quantity)
+    
+    local breakdown = getFeeBreakdown(duration, quantity)
+    local playerFunds = 0
+    
+    local Player = getPlayer(src)
+    if Player then
+        local money = Player.PlayerData.money
+        playerFunds = (money['cash'] or 0) + (money['bank'] or 0)
+    end
+    
+    TriggerClientEvent('auction:client:feePreview', src, {
+        breakdown = breakdown,
+        playerFunds = playerFunds,
+        canAfford = playerFunds >= breakdown.total
+    })
 end)
 
 -- Client reports missing image
