@@ -890,6 +890,82 @@ RegisterNetEvent('auction:server:getAuctions', function()
     })
 end)
 
+-- Search auctions with pagination
+RegisterNetEvent('auction:server:searchAuctions', function(params)
+    local src = source
+    
+    -- Extract parameters with defaults
+    local query = params.query or ''
+    local page = tonumber(params.page) or 1
+    local limit = tonumber(params.limit) or 10
+    local filterOwn = params.filterOwn or false
+    local citizenid = params.citizenid
+    
+    -- Clamp pagination values
+    page = math.max(1, page)
+    limit = math.min(math.max(1, limit), 50)  -- Max 50 per page
+    
+    -- Build filtered list
+    local filteredList = {}
+    local queryLower = string.lower(query)
+    
+    for id, auction in pairs(Auctions) do
+        if auction.status == 'active' then
+            local matchesSearch = true
+            local matchesFilter = true
+            
+            -- Apply search filter
+            if query and #query > 0 then
+                local idMatch = string.find(string.lower(auction.id), queryLower, 1, true)
+                local nameMatch = string.find(string.lower(auction.item.name), queryLower, 1, true)
+                local labelMatch = string.find(string.lower(auction.item.label), queryLower, 1, true)
+                matchesSearch = (idMatch ~= nil) or (nameMatch ~= nil) or (labelMatch ~= nil)
+            end
+            
+            -- Apply "my auctions" filter
+            if filterOwn and citizenid then
+                matchesFilter = auction.owner.citizenid == citizenid
+            end
+            
+            if matchesSearch and matchesFilter then
+                table.insert(filteredList, auction)
+            end
+        end
+    end
+    
+    -- Sort by end time (ending soonest first)
+    table.sort(filteredList, function(a, b)
+        return a.endTime < b.endTime
+    end)
+    
+    -- Calculate pagination
+    local totalCount = #filteredList
+    local totalPages = math.ceil(totalCount / limit)
+    local startIndex = (page - 1) * limit + 1
+    local endIndex = math.min(startIndex + limit - 1, totalCount)
+    
+    -- Extract page slice
+    local pageResults = {}
+    for i = startIndex, endIndex do
+        if filteredList[i] then
+            table.insert(pageResults, filteredList[i])
+        end
+    end
+    
+    TriggerClientEvent('auction:client:receiveSearchResults', src, {
+        auctions = pageResults,
+        bidHistory = BidHistory,
+        pagination = {
+            page = page,
+            limit = limit,
+            totalCount = totalCount,
+            totalPages = totalPages,
+            hasMore = page < totalPages,
+            query = query
+        }
+    })
+end)
+
 RegisterNetEvent('auction:server:createAuction', function(data)
     local src = source
     local result = createAuction(src, data)

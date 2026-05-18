@@ -98,6 +98,17 @@ interface FeePreview {
   canAfford: boolean;
 }
 
+interface Pagination {
+  page: number;
+  limit: number;
+  totalCount: number;
+  totalPages: number;
+  hasMore: boolean;
+  query: string;
+}
+
+type ViewMode = 'card' | 'list';
+
 // Image cache for tracking loaded images across components
 const imageCache: Record<string, { loaded: boolean; failed: boolean }> = {};
 
@@ -334,6 +345,67 @@ function AuctionCard({
       <div className="mt-3 pt-3 border-t border-stone-700/50 flex justify-between text-xs text-stone-500">
         <span>By {auction.owner.name}</span>
         <span>{auction.totalBids} bid{auction.totalBids !== 1 ? 's' : ''}</span>
+      </div>
+    </div>
+  );
+}
+
+// Auction List Row Component (Compact)
+function AuctionListRow({ 
+  auction, 
+  onSelect, 
+  isSelected,
+  playerCitizenid 
+}: { 
+  auction: Auction; 
+  onSelect: () => void;
+  isSelected: boolean;
+  playerCitizenid: string;
+}) {
+  const isOwnAuction = auction.owner.citizenid === playerCitizenid;
+  const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
+
+  return (
+    <div 
+      onClick={onSelect}
+      className={`flex items-center gap-4 p-3 rounded-lg border cursor-pointer transition-all duration-200 ${
+        isSelected 
+          ? 'border-amber-500 bg-amber-950/50' 
+          : 'border-stone-700/50 bg-stone-900/30 hover:bg-stone-800/50 hover:border-stone-600'
+      }`}
+    >
+      {/* Item Image */}
+      <AsyncImage 
+        imageMeta={auction.item.imageMeta}
+        alt={auction.item.label}
+        className="w-12 h-12 rounded-lg flex-shrink-0"
+      />
+      
+      {/* Item Info */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <h3 className="text-white font-medium truncate">{auction.item.label}</h3>
+          {isOwnAuction && (
+            <span className="px-1.5 py-0.5 text-[10px] bg-amber-800 text-amber-200 rounded flex-shrink-0">Yours</span>
+          )}
+          {isHighestBidder && !isOwnAuction && (
+            <span className="px-1.5 py-0.5 text-[10px] bg-emerald-800 text-emerald-200 rounded flex-shrink-0">Winning</span>
+          )}
+        </div>
+        <p className="text-stone-500 text-xs truncate">ID: {auction.id} | Qty: {auction.item.count} | By {auction.owner.name}</p>
+      </div>
+      
+      {/* Bid Info */}
+      <div className="text-right flex-shrink-0 w-28">
+        <p className="text-amber-400 font-semibold text-sm">
+          ${auction.currentBid > 0 ? auction.currentBid.toLocaleString() : auction.startingBid.toLocaleString()}
+        </p>
+        <p className="text-stone-500 text-xs">{auction.totalBids} bid{auction.totalBids !== 1 ? 's' : ''}</p>
+      </div>
+      
+      {/* Timer */}
+      <div className="text-right flex-shrink-0 w-24">
+        <CountdownTimer endTime={auction.endTime} />
       </div>
     </div>
   );
@@ -833,6 +905,19 @@ export default function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeTab, setActiveTab] = useState<'all' | 'mine'>('all');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // New state for view toggle, search, and pagination
+  const [viewMode, setViewMode] = useState<ViewMode>('card');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [pagination, setPagination] = useState<Pagination>({
+    page: 1,
+    limit: 10,
+    totalCount: 0,
+    totalPages: 0,
+    hasMore: false,
+    query: ''
+  });
+  const [isSearching, setIsSearching] = useState(false);
 
   // Add notification helper
   const addNotification = useCallback((notification: Omit<Notification, 'id'>) => {
@@ -860,16 +945,24 @@ export default function App() {
   useNuiEvent('receiveAuctions', (data: { auctions: Auction[]; bidHistory: Record<string, BidEntry[]> }) => {
     setAuctions(data.auctions);
     setBidHistory(data.bidHistory || {});
+    setPagination(prev => ({
+      ...prev,
+      totalCount: data.auctions.length,
+      totalPages: Math.ceil(data.auctions.length / prev.limit),
+      hasMore: data.auctions.length > prev.limit
+    }));
+  });
+
+  useNuiEvent('receiveSearchResults', (data: { auctions: Auction[]; bidHistory: Record<string, BidEntry[]>; pagination: Pagination }) => {
+    setAuctions(data.auctions);
+    setBidHistory(data.bidHistory || {});
+    setPagination(data.pagination);
+    setIsSearching(false);
   });
 
   useNuiEvent('auctionCreated', (auction: Auction) => {
-    setAuctions(prev => {
-      // Prevent duplicates - only add if not already in list
-      if (prev.some(a => a.id === auction.id)) {
-        return prev;
-      }
-      return [auction, ...prev];
-    });
+    // Refresh search results to include new auction
+    handleSearch(searchQuery, pagination.page);
     setBidHistory(prev => ({ ...prev, [auction.id]: [] }));
     setView('list');
     setIsSubmitting(false);
@@ -895,7 +988,8 @@ export default function App() {
   });
 
   useNuiEvent('auctionEnded', (data: { auctionId: string; winner?: Player; soldFor?: number }) => {
-    setAuctions(prev => prev.filter(a => a.id !== data.auctionId));
+    // Refresh search results to remove ended auction
+    handleSearch(searchQuery, pagination.page);
     if (selectedAuctionId === data.auctionId) {
       setSelectedAuctionId(null);
       setView('list');
@@ -903,7 +997,8 @@ export default function App() {
   });
 
   useNuiEvent('auctionCancelled', (data: { auctionId: string }) => {
-    setAuctions(prev => prev.filter(a => a.id !== data.auctionId));
+    // Refresh search results to remove cancelled auction
+    handleSearch(searchQuery, pagination.page);
     if (selectedAuctionId === data.auctionId) {
       setSelectedAuctionId(null);
       setView('list');
@@ -999,6 +1094,34 @@ export default function App() {
     fetchNui('cancelAuction', { auctionId }, { success: true });
   }, []);
 
+  // Search and pagination handlers
+  const handleSearch = useCallback((query: string, page: number = 1) => {
+    setIsSearching(true);
+    fetchNui('searchAuctions', {
+      query,
+      page,
+      limit: pagination.limit,
+      filterOwn: activeTab === 'mine'
+    }, { success: true });
+  }, [pagination.limit, activeTab]);
+
+  const handlePageChange = useCallback((newPage: number) => {
+    handleSearch(searchQuery, newPage);
+  }, [handleSearch, searchQuery]);
+
+  // Debounced search
+  useEffect(() => {
+    if (!visible) return;
+    
+    const timer = setTimeout(() => {
+      if (searchQuery !== pagination.query || searchQuery.length > 0) {
+        handleSearch(searchQuery, 1);
+      }
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [searchQuery, visible]);
+
   // ESC key handler
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1090,8 +1213,6 @@ export default function App() {
   if (!visible) return null;
 
   const selectedAuction = selectedAuctionId ? auctions.find(a => a.id === selectedAuctionId) : null;
-  const myAuctions = auctions.filter(a => a.owner.citizenid === playerData.citizenid);
-  const displayAuctions = activeTab === 'mine' ? myAuctions : auctions;
 
   return (
     <div className="fixed inset-0 flex items-center justify-center p-4">
@@ -1161,53 +1282,136 @@ export default function App() {
         <div className="flex-1 flex flex-col">
           {view === 'list' && (
             <>
-              {/* Header with Tabs */}
-              <div className="p-4 border-b border-stone-700 flex items-center justify-between">
-                <div className="flex gap-2">
+              {/* Header with Tabs and Search */}
+              <div className="p-4 border-b border-stone-700 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setActiveTab('all');
+                        setSearchQuery('');
+                        handleSearch('', 1);
+                      }}
+                      className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                        activeTab === 'all' ? 'bg-amber-700 text-white' : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
+                      }`}
+                    >
+                      All Auctions
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActiveTab('mine');
+                        setSearchQuery('');
+                        handleSearch('', 1);
+                      }}
+                      className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                        activeTab === 'mine' ? 'bg-amber-700 text-white' : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
+                      }`}
+                    >
+                      My Auctions
+                    </button>
+                  </div>
                   <button
-                    onClick={() => setActiveTab('all')}
-                    className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                      activeTab === 'all' ? 'bg-amber-700 text-white' : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
-                    }`}
+                    onClick={() => setView('create')}
+                    className="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
                   >
-                    All Auctions ({auctions.length})
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('mine')}
-                    className={`px-4 py-2 rounded-lg text-sm transition-colors ${
-                      activeTab === 'mine' ? 'bg-amber-700 text-white' : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
-                    }`}
-                  >
-                    My Auctions ({myAuctions.length})
+                    + New Auction
                   </button>
                 </div>
-                <button
-                  onClick={() => setView('create')}
-                  className="px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-sm font-medium transition-colors"
-                >
-                  + New Auction
-                </button>
+                
+                {/* Search Bar and View Toggle */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 relative">
+                    <input
+                      type="text"
+                      placeholder="Search by item name or auction ID..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white placeholder-stone-500 focus:outline-none focus:border-amber-600 pr-8"
+                    />
+                    {isSearching && (
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        <div className="w-4 h-4 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* View Toggle */}
+                  <div className="flex bg-stone-800 border border-stone-700 rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => setViewMode('card')}
+                      className={`px-3 py-2 text-sm transition-colors ${
+                        viewMode === 'card' ? 'bg-amber-700 text-white' : 'text-stone-400 hover:text-white'
+                      }`}
+                      title="Card View"
+                    >
+                      ▦
+                    </button>
+                    <button
+                      onClick={() => setViewMode('list')}
+                      className={`px-3 py-2 text-sm transition-colors ${
+                        viewMode === 'list' ? 'bg-amber-700 text-white' : 'text-stone-400 hover:text-white'
+                      }`}
+                      title="List View"
+                    >
+                      ☰
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Results Count */}
+                <div className="flex items-center justify-between text-xs text-stone-500">
+                  <span>
+                    {pagination.totalCount > 0 
+                      ? `${pagination.totalCount} auction${pagination.totalCount !== 1 ? 's' : ''} found`
+                      : 'No auctions found'
+                    }
+                    {searchQuery && ` for "${searchQuery}"`}
+                  </span>
+                  {pagination.totalPages > 1 && (
+                    <span>Page {pagination.page} of {pagination.totalPages}</span>
+                  )}
+                </div>
               </div>
 
-              {/* Auction Grid */}
+              {/* Auction List/Grid */}
               <div className="flex-1 overflow-y-auto p-4">
-                {displayAuctions.length === 0 ? (
+                {auctions.length === 0 ? (
                   <div className="h-full flex items-center justify-center">
                     <div className="text-center">
                       <p className="text-4xl text-stone-700 mb-2">📦</p>
-                      <p className="text-stone-500">No auctions available</p>
-                      <button
-                        onClick={() => setView('create')}
-                        className="mt-4 px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-sm"
-                      >
-                        Create First Auction
-                      </button>
+                      <p className="text-stone-500">
+                        {searchQuery ? 'No auctions match your search' : 'No auctions available'}
+                      </p>
+                      {!searchQuery && (
+                        <button
+                          onClick={() => setView('create')}
+                          className="mt-4 px-4 py-2 bg-amber-700 hover:bg-amber-600 text-white rounded-lg text-sm"
+                        >
+                          Create First Auction
+                        </button>
+                      )}
                     </div>
                   </div>
-                ) : (
+                ) : viewMode === 'card' ? (
                   <div className="grid grid-cols-2 gap-3">
-                    {displayAuctions.map(auction => (
+                    {auctions.map(auction => (
                       <AuctionCard
+                        key={auction.id}
+                        auction={auction}
+                        playerCitizenid={playerData.citizenid}
+                        isSelected={selectedAuctionId === auction.id}
+                        onSelect={() => {
+                          setSelectedAuctionId(auction.id);
+                          setView('detail');
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {auctions.map(auction => (
+                      <AuctionListRow
                         key={auction.id}
                         auction={auction}
                         playerCitizenid={playerData.citizenid}
@@ -1221,6 +1425,71 @@ export default function App() {
                   </div>
                 )}
               </div>
+              
+              {/* Pagination Controls */}
+              {pagination.totalPages > 1 && (
+                <div className="p-4 border-t border-stone-700 flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(1)}
+                    disabled={pagination.page === 1}
+                    className="px-3 py-1.5 bg-stone-800 border border-stone-700 rounded-lg text-stone-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    First
+                  </button>
+                  <button
+                    onClick={() => handlePageChange(pagination.page - 1)}
+                    disabled={pagination.page === 1}
+                    className="px-3 py-1.5 bg-stone-800 border border-stone-700 rounded-lg text-stone-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    Prev
+                  </button>
+                  
+                  {/* Page Numbers */}
+                  <div className="flex gap-1">
+                    {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+                      let pageNum: number;
+                      if (pagination.totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (pagination.page <= 3) {
+                        pageNum = i + 1;
+                      } else if (pagination.page >= pagination.totalPages - 2) {
+                        pageNum = pagination.totalPages - 4 + i;
+                      } else {
+                        pageNum = pagination.page - 2 + i;
+                      }
+                      
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handlePageChange(pageNum)}
+                          className={`w-8 h-8 rounded-lg text-sm transition-colors ${
+                            pagination.page === pageNum
+                              ? 'bg-amber-700 text-white'
+                              : 'bg-stone-800 text-stone-400 hover:text-white'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  
+                  <button
+                    onClick={() => handlePageChange(pagination.page + 1)}
+                    disabled={!pagination.hasMore}
+                    className="px-3 py-1.5 bg-stone-800 border border-stone-700 rounded-lg text-stone-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => handlePageChange(pagination.totalPages)}
+                    disabled={!pagination.hasMore}
+                    className="px-3 py-1.5 bg-stone-800 border border-stone-700 rounded-lg text-stone-400 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    Last
+                  </button>
+                </div>
+              )}
             </>
           )}
 

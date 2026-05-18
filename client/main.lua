@@ -217,6 +217,21 @@ RegisterNuiCallback('calculateFeePreview', function(data, cb)
     cb({ success = true })
 end)
 
+RegisterNuiCallback('searchAuctions', function(data, cb)
+    -- Get player citizenid for filtering
+    local PlayerData = RSGCore.Functions.GetPlayerData()
+    local citizenid = PlayerData and PlayerData.citizenid or nil
+    
+    TriggerServerEvent('auction:server:searchAuctions', {
+        query = data.query or '',
+        page = data.page or 1,
+        limit = data.limit or 10,
+        filterOwn = data.filterOwn or false,
+        citizenid = citizenid
+    })
+    cb({ success = true })
+end)
+
 -- Image load status from NUI
 RegisterNuiCallback('imageLoaded', function(data, cb)
     if data.url then
@@ -247,6 +262,11 @@ end)
 RegisterNetEvent('auction:client:receiveAuctions', function(data)
     if not isOpen then return end
     NUI.SendMessage('receiveAuctions', data)
+end)
+
+RegisterNetEvent('auction:client:receiveSearchResults', function(data)
+    if not isOpen then return end
+    NUI.SendMessage('receiveSearchResults', data)
 end)
 
 RegisterNetEvent('auction:client:createResult', function(result)
