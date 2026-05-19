@@ -116,6 +116,19 @@ function NUI.Open(data)
     -- Get fee configuration
     local feeConfig = Config.CreationFee or {}
     
+    -- Build categories from config
+    local categories = {}
+    if Config.Categories then
+        for _, cat in ipairs(Config.Categories) do
+            table.insert(categories, {
+                id = cat.id,
+                label = cat.label,
+                icon = cat.icon or '📦',
+                description = cat.description or ''
+            })
+        end
+    end
+    
     SetNuiFocus(true, true)
     NUI.SendMessage('open', {
         inventory = inventory,
@@ -123,7 +136,8 @@ function NUI.Open(data)
         bank = bank,
         citizenid = PlayerData.citizenid,
         playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown',
-        feeConfig = feeConfig
+        feeConfig = feeConfig,
+        categories = categories
     })
     
     -- Request current auctions
@@ -157,12 +171,18 @@ RegisterNuiCallback('createAuction', function(data, cb)
         cb({ success = false, error = 'Item no longer in inventory' })
         return
     end
-    
+
     if item.count < (data.count or 1) then
         cb({ success = false, error = 'Insufficient item count' })
         return
     end
-    
+
+    -- Validate category is provided
+    if not data.category or data.category == '' then
+        cb({ success = false, error = 'Please select a category' })
+        return
+    end
+
     -- Forward to server
     TriggerServerEvent('auction:server:createAuction', {
         itemName = data.itemName,
@@ -170,10 +190,11 @@ RegisterNuiCallback('createAuction', function(data, cb)
         count = data.count or 1,
         metadata = item.metadata,
         image = item.image,
+        category = data.category,
         startingBid = data.startingBid or 1,
         duration = data.duration or 3600
     })
-    
+
     cb({ success = true, message = 'Creating auction...' })
 end)
 
@@ -217,6 +238,11 @@ RegisterNuiCallback('calculateFeePreview', function(data, cb)
     cb({ success = true })
 end)
 
+RegisterNuiCallback('getCategories', function(_, cb)
+    TriggerServerEvent('auction:server:getCategories')
+    cb({ success = true })
+end)
+
 RegisterNuiCallback('searchAuctions', function(data, cb)
     -- Get player citizenid for filtering
     local PlayerData = RSGCore.Functions.GetPlayerData()
@@ -227,7 +253,8 @@ RegisterNuiCallback('searchAuctions', function(data, cb)
         page = data.page or 1,
         limit = data.limit or 10,
         filterOwn = data.filterOwn or false,
-        citizenid = citizenid
+        citizenid = citizenid,
+        category = data.category or nil
     })
     cb({ success = true })
 end)
@@ -336,6 +363,11 @@ end)
 RegisterNetEvent('auction:client:feePreview', function(data)
     if not isOpen then return end
     NUI.SendMessage('feePreview', data)
+end)
+
+RegisterNetEvent('auction:client:receiveCategories', function(data)
+    if not isOpen then return end
+    NUI.SendMessage('receiveCategories', data)
 end)
 
 -- Webhook admin command results

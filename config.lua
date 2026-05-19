@@ -1,6 +1,95 @@
 -- Auction System Configuration
 
 Config = {
+    -- Categories for Auction Items
+    -- Players select a category when creating an auction
+    Categories = {
+        {
+            id = 'weapons',
+            label = 'Weapons',
+            icon = '🔫',
+            description = 'Firearms, melee weapons, and ammunition',
+            items = {}  -- Empty = allows any item matching weapon patterns
+        },
+        {
+            id = 'ammunition',
+            label = 'Ammunition',
+            icon = '🎯',
+            description = 'Bullets, arrows, and throwing weapons',
+            items = {}
+        },
+        {
+            id = 'clothing',
+            label = 'Clothing',
+            icon = '👒',
+            description = 'Apparel, hats, and accessories',
+            items = {}
+        },
+        {
+            id = 'food',
+            label = 'Food & Drink',
+            icon = '🥩',
+            description = 'Consumables, provisions, and beverages',
+            items = {}
+        },
+        {
+            id = 'resources',
+            label = 'Resources',
+            icon = '🪨',
+            description = 'Ores, minerals, and raw materials',
+            items = {}
+        },
+        {
+            id = 'pelts',
+            label = 'Pelts & Hides',
+            icon = '🦌',
+            description = 'Animal pelts, hides, and taxidermy',
+            items = {}
+        },
+        {
+            id = 'medicine',
+            label = 'Medicine',
+            icon = '💊',
+            description = 'Tonics, medicines, and healing items',
+            items = {}
+        },
+        {
+            id = 'tools',
+            label = 'Tools',
+            icon = '🔧',
+            description = 'Tools, kits, and crafting supplies',
+            items = {}
+        },
+        {
+            id = 'valuables',
+            label = 'Valuables',
+            icon = '💎',
+            description = 'Jewelry, gold, and valuable items',
+            items = {}
+        },
+        {
+            id = 'other',
+            label = 'Other',
+            icon = '📦',
+            description = 'Miscellaneous items',
+            items = {}
+        }
+    },
+    
+    -- Category matching rules (item name patterns -> category id)
+    -- Used when category items list is empty
+    CategoryPatterns = {
+        weapons = { 'revolver', 'pistol', 'rifle', 'shotgun', 'bow', 'knife', 'tomahawk', 'lasso', 'weapon_' },
+        ammunition = { 'ammo', 'arrow', 'bolt', 'thrown', 'bullet', 'shell' },
+        clothing = { 'shirt', 'pants', 'hat', 'coat', 'vest', 'boots', 'gloves', 'mask', 'outfit', 'clothing' },
+        food = { 'meat', 'fish', 'bread', 'fruit', 'vegetable', 'canned', 'drink', 'water', 'coffee', 'alcohol', 'whiskey', 'beer' },
+        resources = { 'ore', 'wood', 'stone', 'metal', 'coal', 'iron', 'copper', 'gold_nugget', 'silver' },
+        pelts = { 'pelt', 'hide', 'skin', 'fur', 'carcass', 'feather', 'antler', 'claw', 'tooth' },
+        medicine = { 'tonic', 'medicine', 'pills', 'salve', 'remedy', 'bandage', 'health' },
+        tools = { 'tool', 'kit', 'rope', 'bait', 'trap', 'fishing', 'camp', 'tent', 'lantern', 'map' },
+        valuables = { 'gold', 'silver', 'jewel', 'diamond', 'ring', 'necklace', 'watch', 'coin', 'treasure', 'gem' }
+    },
+    
     -- Auction Settings
     MinStartingBid = 1,
     MinDuration = 60,           -- Minimum auction duration in seconds (1 minute)

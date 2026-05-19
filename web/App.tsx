@@ -37,6 +37,7 @@ interface Auction {
     image?: string;
     imageMeta?: ImageMeta;
   };
+  category?: string;
   startingBid: number;
   currentBid: number;
   highestBidder: Player | null;
@@ -70,6 +71,7 @@ interface PlayerData {
   citizenid: string;
   playerName: string;
   feeConfig?: FeeConfig;
+  categories?: Category[];
 }
 
 interface FeeConfig {
@@ -105,6 +107,13 @@ interface Pagination {
   totalPages: number;
   hasMore: boolean;
   query: string;
+}
+
+interface Category {
+  id: string;
+  label: string;
+  icon: string;
+  description: string;
 }
 
 type ViewMode = 'card' | 'list';
@@ -291,20 +300,29 @@ function CountdownTimer({ endTime }: { endTime: number }) {
   return <span className={`font-mono ${colorClass}`}>{timeString}</span>;
 }
 
+// Helper to get category info by id
+function getCategoryInfo(categoryId: string | undefined, categories: Category[] | undefined): Category | undefined {
+  if (!categoryId || !categories) return undefined;
+  return categories.find(c => c.id === categoryId);
+}
+
 // Auction Card Component
 function AuctionCard({ 
   auction, 
   onSelect, 
   isSelected,
-  playerCitizenid 
+  playerCitizenid,
+  categories
 }: { 
   auction: Auction; 
   onSelect: () => void;
   isSelected: boolean;
   playerCitizenid: string;
+  categories?: Category[];
 }) {
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
+  const categoryInfo = getCategoryInfo(auction.category, categories);
 
   return (
     <div 
@@ -316,17 +334,26 @@ function AuctionCard({
       }`}
     >
       <div className="flex justify-between items-start mb-3">
-        <div>
-          <h3 className="text-white font-semibold">{auction.item.label}</h3>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-white font-semibold truncate">{auction.item.label}</h3>
+            {categoryInfo && (
+              <span className="px-1.5 py-0.5 text-[10px] bg-stone-700 text-stone-300 rounded flex-shrink-0" title={categoryInfo.description}>
+                {categoryInfo.icon} {categoryInfo.label}
+              </span>
+            )}
+          </div>
           <p className="text-stone-500 text-xs">ID: {auction.id}</p>
           <p className="text-stone-400 text-xs">Qty: {auction.item.count}</p>
         </div>
-        {isOwnAuction && (
-          <span className="px-2 py-0.5 text-xs bg-amber-800 text-amber-200 rounded">Your Auction</span>
-        )}
-        {isHighestBidder && !isOwnAuction && (
-          <span className="px-2 py-0.5 text-xs bg-emerald-800 text-emerald-200 rounded">Winning</span>
-        )}
+        <div className="flex flex-col gap-1 items-end">
+          {isOwnAuction && (
+            <span className="px-2 py-0.5 text-xs bg-amber-800 text-amber-200 rounded">Your Auction</span>
+          )}
+          {isHighestBidder && !isOwnAuction && (
+            <span className="px-2 py-0.5 text-xs bg-emerald-800 text-emerald-200 rounded">Winning</span>
+          )}
+        </div>
       </div>
 
       <div className="flex justify-between items-center text-sm">
@@ -355,15 +382,18 @@ function AuctionListRow({
   auction, 
   onSelect, 
   isSelected,
-  playerCitizenid 
+  playerCitizenid,
+  categories
 }: { 
   auction: Auction; 
   onSelect: () => void;
   isSelected: boolean;
   playerCitizenid: string;
+  categories?: Category[];
 }) {
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
+  const categoryInfo = getCategoryInfo(auction.category, categories);
 
   return (
     <div 
@@ -383,8 +413,13 @@ function AuctionListRow({
       
       {/* Item Info */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <h3 className="text-white font-medium truncate">{auction.item.label}</h3>
+          {categoryInfo && (
+            <span className="px-1.5 py-0.5 text-[10px] bg-stone-700 text-stone-300 rounded flex-shrink-0">
+              {categoryInfo.icon}
+            </span>
+          )}
           {isOwnAuction && (
             <span className="px-1.5 py-0.5 text-[10px] bg-amber-800 text-amber-200 rounded flex-shrink-0">Yours</span>
           )}
@@ -412,34 +447,107 @@ function AuctionListRow({
 }
 
 // Create Auction Form Component
-function CreateAuctionForm({ 
-  inventory, 
-  onCreate, 
+function CreateAuctionForm({
+  inventory,
+  onCreate,
   onClose,
   isSubmitting,
   feeConfig,
-  playerFunds
-}: { 
-  inventory: InventoryItem[]; 
-  onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number }) => void;
+  playerFunds,
+  categories
+}: {
+  inventory: InventoryItem[];
+  onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number; category: string }) => void;
   onClose: () => void;
   isSubmitting: boolean;
   feeConfig?: FeeConfig;
   playerFunds: number;
+  categories?: Category[];
 }) {
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [count, setCount] = useState(1);
   const [startingBid, setStartingBid] = useState(100);
   const [duration, setDuration] = useState(3600);
   const [searchQuery, setSearchQuery] = useState('');
-  const [feePreview, setFeePreview] = useState<FeePreview | null>(null);
 
   const filteredInventory = useMemo(() => {
-    if (!searchQuery) return inventory;
-    return inventory.filter(item => 
-      item.label.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    let items = inventory;
+    if (searchQuery) {
+      items = items.filter(item =>
+        item.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.name.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    return items;
   }, [inventory, searchQuery]);
+
+  // Group inventory by category (simple pattern matching for demo)
+  const inventoryByCategory = useMemo(() => {
+    const grouped: Record<string, InventoryItem[]> = { 'all': filteredInventory };
+
+    if (categories && categories.length > 0) {
+      categories.forEach(cat => {
+        const patternKey = cat.id.toLowerCase();
+        grouped[cat.id] = filteredInventory.filter(item => {
+          const nameLower = item.name.toLowerCase();
+          const labelLower = item.label.toLowerCase();
+
+          // Simple pattern matching based on category
+          switch (cat.id) {
+            case 'weapons':
+              return nameLower.includes('revolver') || nameLower.includes('pistol') ||
+                     nameLower.includes('rifle') || nameLower.includes('shotgun') ||
+                     nameLower.includes('bow') || nameLower.includes('knife') ||
+                     nameLower.includes('weapon') || nameLower.includes('tomahawk');
+            case 'ammunition':
+              return nameLower.includes('ammo') || nameLower.includes('arrow') ||
+                     nameLower.includes('bullet') || nameLower.includes('shell');
+            case 'clothing':
+              return nameLower.includes('shirt') || nameLower.includes('pants') ||
+                     nameLower.includes('hat') || nameLower.includes('coat') ||
+                     nameLower.includes('vest') || nameLower.includes('boots') ||
+                     nameLower.includes('outfit') || nameLower.includes('clothing');
+            case 'food':
+              return nameLower.includes('meat') || nameLower.includes('fish') ||
+                     nameLower.includes('bread') || nameLower.includes('fruit') ||
+                     nameLower.includes('drink') || nameLower.includes('food') ||
+                     nameLower.includes('canned') || nameLower.includes('alcohol');
+            case 'resources':
+              return nameLower.includes('ore') || nameLower.includes('wood') ||
+                     nameLower.includes('stone') || nameLower.includes('metal') ||
+                     nameLower.includes('coal') || nameLower.includes('iron') ||
+                     nameLower.includes('gold_nugget') || nameLower.includes('silver');
+            case 'pelts':
+              return nameLower.includes('pelt') || nameLower.includes('hide') ||
+                     nameLower.includes('skin') || nameLower.includes('fur') ||
+                     nameLower.includes('carcass') || nameLower.includes('feather');
+            case 'medicine':
+              return nameLower.includes('tonic') || nameLower.includes('medicine') ||
+                     nameLower.includes('pills') || nameLower.includes('health') ||
+                     nameLower.includes('remedy');
+            case 'tools':
+              return nameLower.includes('tool') || nameLower.includes('kit') ||
+                     nameLower.includes('rope') || nameLower.includes('bait') ||
+                     nameLower.includes('fishing') || nameLower.includes('camp');
+            case 'valuables':
+              return nameLower.includes('gold') || nameLower.includes('silver') ||
+                     nameLower.includes('jewel') || nameLower.includes('diamond') ||
+                     nameLower.includes('ring') || nameLower.includes('coin') ||
+                     nameLower.includes('gem') || nameLower.includes('treasure');
+            default:
+              return false;
+          }
+        });
+      });
+    }
+
+    return grouped;
+  }, [filteredInventory, categories]);
+
+  const displayItems = selectedCategory && selectedCategory !== 'all'
+    ? (inventoryByCategory[selectedCategory] || [])
+    : filteredInventory;
 
   // Calculate local fee preview (client-side for responsiveness)
   const localFeePreview = useMemo(() => {
@@ -474,16 +582,19 @@ function CreateAuctionForm({
   }, [feeConfig, duration, count]);
 
   const canAffordFee = playerFunds >= localFeePreview.total;
+  const selectedCategoryLabel = categories?.find(c => c.id === selectedCategory)?.label || 'All Items';
 
   const handleSubmit = (e: import('react').FormEvent) => {
     e.preventDefault();
     if (!selectedItem || count < 1 || startingBid < 1) return;
     if (!canAffordFee) return;
+    if (!selectedCategory) return;
     onCreate({
       itemName: selectedItem.name,
       count,
       startingBid,
-      duration
+      duration,
+      category: selectedCategory
     });
   };
 
@@ -500,197 +611,258 @@ function CreateAuctionForm({
   ];
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between p-4 border-b border-stone-700">
-        <h2 className="text-xl font-semibold text-white">Create Auction</h2>
-        <button onClick={onClose} className="text-stone-400 hover:text-white text-lg">✕</button>
+    <div className="h-full flex">
+      {/* Category Sidebar */}
+      <div className="w-44 border-r border-stone-700 flex flex-col bg-stone-900/50">
+        <div className="p-3 border-b border-stone-700">
+          <h3 className="text-stone-400 text-xs uppercase tracking-wide">Categories</h3>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          <button
+            type="button"
+            onClick={() => setSelectedCategory('')}
+            className={`w-full text-left px-3 py-2 rounded-lg mb-1 text-sm transition-colors ${
+              !selectedCategory ? 'bg-amber-900/50 text-amber-200' : 'text-stone-400 hover:bg-stone-800'
+            }`}
+          >
+            📦 All Items
+          </button>
+          {categories?.map(cat => (
+            <button
+              key={cat.id}
+              type="button"
+              onClick={() => setSelectedCategory(cat.id)}
+              className={`w-full text-left px-3 py-2 rounded-lg mb-1 text-sm transition-colors ${
+                selectedCategory === cat.id ? 'bg-amber-900/50 text-amber-200' : 'text-stone-400 hover:bg-stone-800'
+              }`}
+            >
+              {cat.icon} {cat.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Item Selection */}
-        <div>
-          <label className="block text-stone-300 text-sm mb-2">Select Item</label>
-          <input
-            type="text"
-            placeholder="Search inventory..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white placeholder-stone-500 focus:outline-none focus:border-amber-600 mb-2"
-          />
-          <div className="max-h-48 overflow-y-auto border border-stone-700 rounded-lg">
-            {filteredInventory.length === 0 ? (
-              <p className="p-3 text-stone-500 text-sm text-center">No items found</p>
-            ) : (
-              filteredInventory.map((item) => (
-                <div
-                  key={item.name}
-                  onClick={() => {
-                    setSelectedItem(item);
-                    setCount(1);
-                  }}
-                  className={`flex justify-between items-center p-3 cursor-pointer transition-colors ${
-                    selectedItem?.name === item.name 
-                      ? 'bg-amber-900/50 border-l-2 border-amber-500' 
-                      : 'hover:bg-stone-800'
-                  }`}
-                >
-                  <div>
-                    <p className="text-white text-sm">{item.label}</p>
-                    <p className="text-stone-500 text-xs">{item.name}</p>
-                  </div>
-                  <span className="text-stone-400 text-sm">x{item.count}</span>
-                </div>
-              ))
-            )}
-          </div>
+      {/* Main Form */}
+      <div className="flex-1 flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-stone-700">
+          <h2 className="text-xl font-semibold text-white">Create Auction</h2>
+          <button onClick={onClose} className="text-stone-400 hover:text-white text-lg">✕</button>
         </div>
 
-        {selectedItem && (
-          <>
-            {/* Quantity */}
-            <div>
-              <label className="block text-stone-300 text-sm mb-2">Quantity</label>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setCount(Math.max(1, count - 1))}
-                  className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
-                >-</button>
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Category Selection Required */}
+          {!selectedCategory && (
+            <div className="bg-amber-950/50 border border-amber-700 rounded-lg p-4">
+              <p className="text-amber-200 text-sm">
+                <span className="font-bold">Step 1:</span> Select a category from the sidebar to filter items
+              </p>
+            </div>
+          )}
+
+          {/* Item Selection */}
+          <div>
+            <label className="block text-stone-300 text-sm mb-2">
+              {selectedCategory ? `Select Item (${selectedCategoryLabel})` : 'Select Item'}
+            </label>
+            <input
+              type="text"
+              placeholder="Search inventory..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white placeholder-stone-500 focus:outline-none focus:border-amber-600 mb-2"
+            />
+            <div className="max-h-52 overflow-y-auto border border-stone-700 rounded-lg">
+              {displayItems.length === 0 ? (
+                <p className="p-3 text-stone-500 text-sm text-center">
+                  {selectedCategory ? `No items in ${selectedCategoryLabel}` : 'No items found'}
+                </p>
+              ) : (
+                displayItems.map((item) => (
+                  <div
+                    key={item.name}
+                    onClick={() => {
+                      setSelectedItem(item);
+                      setCount(1);
+                    }}
+                    className={`flex justify-between items-center p-3 cursor-pointer transition-colors ${
+                      selectedItem?.name === item.name
+                        ? 'bg-amber-900/50 border-l-2 border-amber-500'
+                        : 'hover:bg-stone-800'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AsyncImage
+                        imageMeta={item.imageMeta}
+                        alt={item.label}
+                        className="w-8 h-8 rounded"
+                      />
+                      <div>
+                        <p className="text-white text-sm">{item.label}</p>
+                        <p className="text-stone-500 text-xs">{item.name}</p>
+                      </div>
+                    </div>
+                    <span className="text-stone-400 text-sm">x{item.count}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {selectedItem && (
+            <>
+              {/* Quantity */}
+              <div>
+                <label className="block text-stone-300 text-sm mb-2">Quantity</label>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCount(Math.max(1, count - 1))}
+                    className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
+                  >-</button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={selectedItem.count}
+                    value={count}
+                    onChange={(e) => setCount(Math.min(selectedItem.count, Math.max(1, parseInt(e.target.value) || 1)))}
+                    className="flex-1 bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white text-center focus:outline-none focus:border-amber-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCount(Math.min(selectedItem.count, count + 1))}
+                    className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
+                  >+</button>
+                  <button
+                    type="button"
+                    onClick={() => setCount(selectedItem.count)}
+                    className="px-3 h-10 bg-stone-800 border border-stone-700 rounded-lg text-stone-300 text-sm hover:bg-stone-700"
+                  >Max</button>
+                </div>
+                <p className="text-stone-500 text-xs mt-1">Available: {selectedItem.count}</p>
+              </div>
+
+              {/* Starting Bid */}
+              <div>
+                <label className="block text-stone-300 text-sm mb-2">Starting Bid ($)</label>
                 <input
                   type="number"
                   min={1}
-                  max={selectedItem.count}
-                  value={count}
-                  onChange={(e) => setCount(Math.min(selectedItem.count, Math.max(1, parseInt(e.target.value) || 1)))}
-                  className="flex-1 bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white text-center focus:outline-none focus:border-amber-600"
+                  value={startingBid}
+                  onChange={(e) => setStartingBid(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
                 />
-                <button
-                  type="button"
-                  onClick={() => setCount(Math.min(selectedItem.count, count + 1))}
-                  className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
-                >+</button>
-                <button
-                  type="button"
-                  onClick={() => setCount(selectedItem.count)}
-                  className="px-3 h-10 bg-stone-800 border border-stone-700 rounded-lg text-stone-300 text-sm hover:bg-stone-700"
-                >Max</button>
               </div>
-              <p className="text-stone-500 text-xs mt-1">Available: {selectedItem.count}</p>
-            </div>
 
-            {/* Starting Bid */}
-            <div>
-              <label className="block text-stone-300 text-sm mb-2">Starting Bid ($)</label>
-              <input
-                type="number"
-                min={1}
-                value={startingBid}
-                onChange={(e) => setStartingBid(Math.max(1, parseInt(e.target.value) || 1))}
-                className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
-              />
-            </div>
+              {/* Duration */}
+              <div>
+                <label className="block text-stone-300 text-sm mb-2">Duration</label>
+                <select
+                  value={duration}
+                  onChange={(e) => setDuration(parseInt(e.target.value))}
+                  className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
+                >
+                  {durationOptions.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
 
-            {/* Duration */}
-            <div>
-              <label className="block text-stone-300 text-sm mb-2">Duration</label>
-              <select
-                value={duration}
-                onChange={(e) => setDuration(parseInt(e.target.value))}
-                className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
-              >
-                {durationOptions.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Fee Breakdown */}
-            {localFeePreview.enabled && (
-              <div className={`rounded-lg p-4 border ${
-                canAffordFee 
-                  ? 'bg-stone-800/50 border-stone-700' 
-                  : 'bg-red-950/50 border-red-800'
-              }`}>
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-stone-400 text-xs uppercase tracking-wide">Creation Fee</h4>
-                  <span className={`text-lg font-bold ${canAffordFee ? 'text-amber-400' : 'text-red-400'}`}>
-                    ${localFeePreview.total}
-                  </span>
+              {/* Fee Breakdown */}
+              {localFeePreview.enabled && (
+                <div className={`rounded-lg p-4 border ${
+                  canAffordFee
+                    ? 'bg-stone-800/50 border-stone-700'
+                    : 'bg-red-950/50 border-red-800'
+                }`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-stone-400 text-xs uppercase tracking-wide">Creation Fee</h4>
+                    <span className={`text-lg font-bold ${canAffordFee ? 'text-amber-400' : 'text-red-400'}`}>
+                      ${localFeePreview.total}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-stone-500">Base fee</span>
+                      <span className="text-stone-300">${localFeePreview.baseFee}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-500">Duration ({(duration / 3600).toFixed(1)} hrs × ${feeConfig?.durationMultiplier || 2})</span>
+                      <span className="text-stone-300">${localFeePreview.durationFee.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-500">Quantity ({count} × ${feeConfig?.quantityMultiplier || 0.5})</span>
+                      <span className="text-stone-300">${localFeePreview.quantityFee.toFixed(2)}</span>
+                    </div>
+                    {localFeePreview.wasCapped && (
+                      <div className="flex justify-between text-amber-400">
+                        <span>Fee capped at max</span>
+                        <span>${localFeePreview.maxFee}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-stone-700/50 flex justify-between text-xs">
+                    <span className="text-stone-500">Your funds</span>
+                    <span className={canAffordFee ? 'text-emerald-400' : 'text-red-400'}>
+                      ${playerFunds.toLocaleString()}
+                    </span>
+                  </div>
                 </div>
-                <div className="space-y-1.5 text-sm">
+              )}
+
+              {/* Summary */}
+              <div className="bg-stone-800/50 rounded-lg p-4 border border-stone-700">
+                <h4 className="text-stone-400 text-xs uppercase tracking-wide mb-3">Auction Summary</h4>
+                <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-stone-500">Base fee</span>
-                    <span className="text-stone-300">${localFeePreview.baseFee}</span>
+                    <span className="text-stone-400">Item</span>
+                    <span className="text-white">{selectedItem.label} x{count}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-stone-500">Duration ({(duration / 3600).toFixed(1)} hrs × ${feeConfig?.durationMultiplier || 2})</span>
-                    <span className="text-stone-300">${localFeePreview.durationFee.toFixed(2)}</span>
+                    <span className="text-stone-400">Category</span>
+                    <span className={selectedCategory ? 'text-amber-400' : 'text-red-400'}>
+                      {selectedCategoryLabel || 'Select a category'}
+                    </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-stone-500">Quantity ({count} × ${feeConfig?.quantityMultiplier || 0.5})</span>
-                    <span className="text-stone-300">${localFeePreview.quantityFee.toFixed(2)}</span>
+                    <span className="text-stone-400">Starting Bid</span>
+                    <span className="text-amber-400">${startingBid.toLocaleString()}</span>
                   </div>
-                  {localFeePreview.wasCapped && (
-                    <div className="flex justify-between text-amber-400">
-                      <span>Fee capped at max</span>
-                      <span>${localFeePreview.maxFee}</span>
+                  <div className="flex justify-between">
+                    <span className="text-stone-400">Duration</span>
+                    <span className="text-white">{durationOptions.find(o => o.value === duration)?.label}</span>
+                  </div>
+                  {localFeePreview.enabled && (
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">Creation Fee</span>
+                      <span className={canAffordFee ? 'text-amber-400' : 'text-red-400'}>${localFeePreview.total}</span>
                     </div>
                   )}
                 </div>
-                <div className="mt-3 pt-3 border-t border-stone-700/50 flex justify-between text-xs">
-                  <span className="text-stone-500">Your funds</span>
-                  <span className={canAffordFee ? 'text-emerald-400' : 'text-red-400'}>
-                    ${playerFunds.toLocaleString()}
-                  </span>
-                </div>
               </div>
-            )}
 
-            {/* Summary */}
-            <div className="bg-stone-800/50 rounded-lg p-4 border border-stone-700">
-              <h4 className="text-stone-400 text-xs uppercase tracking-wide mb-3">Auction Summary</h4>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-stone-400">Item</span>
-                  <span className="text-white">{selectedItem.label} x{count}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-stone-400">Starting Bid</span>
-                  <span className="text-amber-400">${startingBid.toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-stone-400">Duration</span>
-                  <span className="text-white">{durationOptions.find(o => o.value === duration)?.label}</span>
-                </div>
-                {localFeePreview.enabled && (
-                  <div className="flex justify-between">
-                    <span className="text-stone-400">Creation Fee</span>
-                    <span className={canAffordFee ? 'text-amber-400' : 'text-red-400'}>${localFeePreview.total}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={isSubmitting || !canAffordFee}
-              className={`w-full font-semibold py-3 rounded-lg transition-colors ${
-                isSubmitting || !canAffordFee
-                  ? 'bg-stone-700 text-stone-400 cursor-not-allowed' 
-                  : 'bg-amber-700 hover:bg-amber-600 text-white'
-              }`}
-            >
-              {!canAffordFee 
-                ? `Insufficient Funds (Need $${localFeePreview.total})`
-                : isSubmitting 
-                  ? 'Creating...' 
-                  : `Create Auction ($${localFeePreview.total} fee)`
-              }
-            </button>
-          </>
-        )}
-      </form>
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={isSubmitting || !canAffordFee || !selectedCategory}
+                className={`w-full font-semibold py-3 rounded-lg transition-colors ${
+                  isSubmitting || !canAffordFee || !selectedCategory
+                    ? 'bg-stone-700 text-stone-400 cursor-not-allowed'
+                    : 'bg-amber-700 hover:bg-amber-600 text-white'
+                }`}
+              >
+                {!selectedCategory
+                  ? 'Select a category first'
+                  : !canAffordFee
+                    ? `Insufficient Funds (Need $${localFeePreview.total})`
+                    : isSubmitting
+                      ? 'Creating...'
+                      : `Create Auction ($${localFeePreview.total} fee)`
+                }
+              </button>
+            </>
+          )}
+        </form>
+      </div>
     </div>
   );
 }
@@ -703,7 +875,8 @@ function AuctionDetailView({
   playerFunds,
   onPlaceBid,
   onCancel,
-  onBack
+  onBack,
+  categories
 }: {
   auction: Auction;
   bidHistory: BidEntry[];
@@ -712,12 +885,14 @@ function AuctionDetailView({
   onPlaceBid: (amount: number) => void;
   onCancel: () => void;
   onBack: () => void;
+  categories?: Category[];
 }) {
   const [bidAmount, setBidAmount] = useState(0);
   const [showConfirmCancel, setShowConfirmCancel] = useState(false);
 
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
+  const categoryInfo = getCategoryInfo(auction.category, categories);
   const totalFunds = playerFunds.cash + playerFunds.bank;
   const minBid = auction.currentBid > 0 
     ? Math.ceil(auction.currentBid * 1.05) 
@@ -762,6 +937,11 @@ function AuctionDetailView({
             <div className="flex-1">
               <p className="text-white font-medium">{auction.item.label}</p>
               <p className="text-stone-500 text-sm">Quantity: {auction.item.count}</p>
+              {categoryInfo && (
+                <p className="text-stone-400 text-sm mt-1">
+                  <span className="text-stone-500">Category:</span> {categoryInfo.icon} {categoryInfo.label}
+                </p>
+              )}
               <p className="text-stone-500 text-sm mt-1">Seller: {auction.owner.name}</p>
             </div>
           </div>
@@ -863,7 +1043,7 @@ function AuctionDetailView({
           {bidHistory.length === 0 ? (
             <p className="text-stone-500 text-sm text-center py-4">No bids yet</p>
           ) : (
-            <div className="space-y-2 max-h-48 overflow-y-auto">
+            <div className="space-y-2 max-h-60 overflow-y-auto">
               {bidHistory.map((bid, index) => (
                 <div
                   key={index}
@@ -888,6 +1068,59 @@ function AuctionDetailView({
   );
 }
 
+// Category Sidebar Component
+function CategorySidebar({
+  categories,
+  selectedCategory,
+  onSelectCategory,
+  visible = true
+}: {
+  categories?: Category[];
+  selectedCategory: string;
+  onSelectCategory: (categoryId: string) => void;
+  visible?: boolean;
+}) {
+  if (!visible || !categories || categories.length === 0) return null;
+
+  const buttonBaseClass = "w-full text-left px-3 py-2.5 rounded-lg mb-1 text-sm transition-colors flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-1 focus-visible:ring-offset-stone-900";
+
+  return (
+    <div className="w-48 border-r border-stone-700 flex flex-col bg-stone-900/30">
+      <div className="p-3 border-b border-stone-700">
+        <h3 className="text-stone-400 text-xs uppercase tracking-wide font-medium">Categories</h3>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2">
+        <button
+          onClick={() => onSelectCategory('')}
+          className={`${buttonBaseClass} ${
+            !selectedCategory 
+              ? 'bg-amber-900/60 text-amber-200 border-l-2 border-amber-500' 
+              : 'text-stone-400 hover:bg-stone-800 hover:text-stone-200'
+          }`}
+        >
+          <span className="text-base">📦</span>
+          <span>All Items</span>
+        </button>
+        {categories.map(cat => (
+          <button
+            key={cat.id}
+            onClick={() => onSelectCategory(cat.id)}
+            className={`${buttonBaseClass} ${
+              selectedCategory === cat.id 
+                ? 'bg-amber-900/60 text-amber-200 border-l-2 border-amber-500' 
+                : 'text-stone-400 hover:bg-stone-800 hover:text-stone-200'
+            }`}
+            title={cat.description}
+          >
+            <span className="text-base">{cat.icon}</span>
+            <span className="truncate">{cat.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Main App Component
 export default function App() {
   const [visible, setVisible] = useState(isDebug);
@@ -907,8 +1140,9 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   // New state for view toggle, search, and pagination
-  const [viewMode, setViewMode] = useState<ViewMode>('card');
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<string>('');
   const [pagination, setPagination] = useState<Pagination>({
     page: 1,
     limit: 10,
@@ -1081,7 +1315,7 @@ export default function App() {
     fetchNui('close', {}, { success: true });
   }, []);
 
-  const handleCreateAuction = useCallback((data: { itemName: string; count: number; startingBid: number; duration: number }) => {
+  const handleCreateAuction = useCallback((data: { itemName: string; count: number; startingBid: number; duration: number; category: string }) => {
     setIsSubmitting(true);
     fetchNui('createAuction', data, { success: true });
   }, []);
@@ -1095,15 +1329,17 @@ export default function App() {
   }, []);
 
   // Search and pagination handlers
-  const handleSearch = useCallback((query: string, page: number = 1) => {
+  const handleSearch = useCallback((query: string, page: number = 1, category?: string) => {
     setIsSearching(true);
+    const effectiveCategory = category !== undefined ? category : categoryFilter;
     fetchNui('searchAuctions', {
       query,
       page,
       limit: pagination.limit,
-      filterOwn: activeTab === 'mine'
+      filterOwn: activeTab === 'mine',
+      category: effectiveCategory || undefined
     }, { success: true });
-  }, [pagination.limit, activeTab]);
+  }, [pagination.limit, activeTab, categoryFilter]);
 
   const handlePageChange = useCallback((newPage: number) => {
     handleSearch(searchQuery, newPage);
@@ -1114,13 +1350,13 @@ export default function App() {
     if (!visible) return;
     
     const timer = setTimeout(() => {
-      if (searchQuery !== pagination.query || searchQuery.length > 0) {
+      if (searchQuery !== pagination.query || searchQuery.length > 0 || categoryFilter) {
         handleSearch(searchQuery, 1);
       }
     }, 300);
     
     return () => clearTimeout(timer);
-  }, [searchQuery, visible]);
+  }, [searchQuery, categoryFilter, visible]);
 
   // ESC key handler
   useEffect(() => {
@@ -1153,7 +1389,19 @@ export default function App() {
           quantityMultiplier: 0.5,
           maxFee: 500,
           minFee: 5
-        }
+        },
+        categories: [
+          { id: 'weapons', label: 'Weapons', icon: '🔫', description: 'Firearms, melee weapons, and ammunition' },
+          { id: 'ammunition', label: 'Ammunition', icon: '🎯', description: 'Bullets, arrows, and throwing weapons' },
+          { id: 'clothing', label: 'Clothing', icon: '👒', description: 'Apparel, hats, and accessories' },
+          { id: 'food', label: 'Food & Drink', icon: '🥩', description: 'Consumables, provisions, and beverages' },
+          { id: 'resources', label: 'Resources', icon: '🪨', description: 'Ores, minerals, and raw materials' },
+          { id: 'pelts', label: 'Pelts & Hides', icon: '🦌', description: 'Animal pelts, hides, and taxidermy' },
+          { id: 'medicine', label: 'Medicine', icon: '💊', description: 'Tonics, medicines, and healing items' },
+          { id: 'tools', label: 'Tools', icon: '🔧', description: 'Tools, kits, and crafting supplies' },
+          { id: 'valuables', label: 'Valuables', icon: '💎', description: 'Jewelry, gold, and valuable items' },
+          { id: 'other', label: 'Other', icon: '📦', description: 'Miscellaneous items' }
+        ]
       });
 
       setAuctions([
@@ -1161,6 +1409,7 @@ export default function App() {
           id: 'AUC_1',
           owner: { id: 2, name: 'John Marston', citizenid: 'citizen2' },
           item: { name: 'gold_nugget', label: 'Gold Nugget', count: 10, metadata: {} },
+          category: 'valuables',
           startingBid: 100,
           currentBid: 250,
           highestBidder: { id: 3, name: 'Arthur Morgan', citizenid: 'citizen3' },
@@ -1173,6 +1422,7 @@ export default function App() {
           id: 'AUC_2',
           owner: { id: 4, name: 'Dutch van der Linde', citizenid: 'citizen4' },
           item: { name: 'revolver_schofield', label: 'Schofield Revolver', count: 1, metadata: { condition: 90 } },
+          category: 'weapons',
           startingBid: 500,
           currentBid: 0,
           highestBidder: null,
@@ -1185,6 +1435,7 @@ export default function App() {
           id: 'AUC_3',
           owner: { id: 5, name: 'Sadie Adler', citizenid: 'citizen5' },
           item: { name: 'pelt_bear', label: 'Perfect Bear Pelt', count: 1, metadata: { quality: 'perfect' } },
+          category: 'pelts',
           startingBid: 200,
           currentBid: 350,
           highestBidder: { id: 1, name: 'Test Player', citizenid: 'player1' },
@@ -1228,9 +1479,9 @@ export default function App() {
       </div>
 
       {/* Main Container */}
-      <div className="w-[900px] max-w-[95vw] h-[700px] max-h-[90vh] bg-stone-950 border border-stone-700 rounded-xl shadow-2xl flex overflow-hidden">
-        {/* Sidebar */}
-        <div className="w-64 border-r border-stone-700 flex flex-col">
+      <div className="w-[1150px] max-w-[95vw] h-[780px] max-h-[90vh] bg-stone-950 border border-stone-700 rounded-xl shadow-2xl flex overflow-hidden">
+        {/* Navigation Sidebar */}
+        <div className="w-56 border-r border-stone-700 flex flex-col flex-shrink-0">
           <div className="p-4 border-b border-stone-700">
             <h1 className="text-amber-500 text-lg font-bold tracking-wide">AUCTION HOUSE</h1>
             <p className="text-stone-500 text-xs mt-1">Welcome, {playerData.playerName}</p>
@@ -1278,8 +1529,19 @@ export default function App() {
           </div>
         </div>
 
+        {/* Category Sidebar - Only visible in list view */}
+        <CategorySidebar
+          categories={playerData.categories}
+          selectedCategory={categoryFilter}
+          onSelectCategory={(categoryId) => {
+            setCategoryFilter(categoryId);
+            handleSearch(searchQuery, 1, categoryId);
+          }}
+          visible={view === 'list'}
+        />
+
         {/* Main Content */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {view === 'list' && (
             <>
               {/* Header with Tabs and Search */}
@@ -1290,7 +1552,8 @@ export default function App() {
                       onClick={() => {
                         setActiveTab('all');
                         setSearchQuery('');
-                        handleSearch('', 1);
+                        setCategoryFilter('');
+                        handleSearch('', 1, '');
                       }}
                       className={`px-4 py-2 rounded-lg text-sm transition-colors ${
                         activeTab === 'all' ? 'bg-amber-700 text-white' : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
@@ -1302,7 +1565,8 @@ export default function App() {
                       onClick={() => {
                         setActiveTab('mine');
                         setSearchQuery('');
-                        handleSearch('', 1);
+                        setCategoryFilter('');
+                        handleSearch('', 1, '');
                       }}
                       className={`px-4 py-2 rounded-lg text-sm transition-colors ${
                         activeTab === 'mine' ? 'bg-amber-700 text-white' : 'bg-stone-800 text-stone-400 hover:bg-stone-700'
@@ -1359,13 +1623,18 @@ export default function App() {
                   </div>
                 </div>
                 
-                {/* Results Count */}
+                {/* Results Count with active category indicator */}
                 <div className="flex items-center justify-between text-xs text-stone-500">
                   <span>
                     {pagination.totalCount > 0 
                       ? `${pagination.totalCount} auction${pagination.totalCount !== 1 ? 's' : ''} found`
                       : 'No auctions found'
                     }
+                    {categoryFilter && (
+                      <span className="text-amber-400 ml-1">
+                        in {playerData.categories?.find(c => c.id === categoryFilter)?.label || 'category'}
+                      </span>
+                    )}
                     {searchQuery && ` for "${searchQuery}"`}
                   </span>
                   {pagination.totalPages > 1 && (
@@ -1401,6 +1670,7 @@ export default function App() {
                         auction={auction}
                         playerCitizenid={playerData.citizenid}
                         isSelected={selectedAuctionId === auction.id}
+                        categories={playerData.categories}
                         onSelect={() => {
                           setSelectedAuctionId(auction.id);
                           setView('detail');
@@ -1415,6 +1685,7 @@ export default function App() {
                         key={auction.id}
                         auction={auction}
                         playerCitizenid={playerData.citizenid}
+                        categories={playerData.categories}
                         isSelected={selectedAuctionId === auction.id}
                         onSelect={() => {
                           setSelectedAuctionId(auction.id);
@@ -1501,6 +1772,7 @@ export default function App() {
               isSubmitting={isSubmitting}
               feeConfig={playerData.feeConfig}
               playerFunds={playerData.cash + playerData.bank}
+              categories={playerData.categories}
             />
           )}
 
@@ -1513,6 +1785,7 @@ export default function App() {
               onPlaceBid={(amount) => handlePlaceBid(selectedAuction.id, amount)}
               onCancel={() => handleCancelAuction(selectedAuction.id)}
               onBack={() => { setView('list'); setSelectedAuctionId(null); }}
+              categories={playerData.categories}
             />
           )}
         </div>
