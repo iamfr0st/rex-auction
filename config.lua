@@ -76,20 +76,6 @@ Config = {
         }
     },
     
-    -- Category matching rules (item name patterns -> category id)
-    -- Used when category items list is empty
-    CategoryPatterns = {
-        weapons = { 'revolver', 'pistol', 'rifle', 'shotgun', 'bow', 'knife', 'tomahawk', 'lasso', 'weapon_' },
-        ammunition = { 'ammo', 'arrow', 'bolt', 'thrown', 'bullet', 'shell' },
-        clothing = { 'shirt', 'pants', 'hat', 'coat', 'vest', 'boots', 'gloves', 'mask', 'outfit', 'clothing' },
-        food = { 'meat', 'fish', 'bread', 'fruit', 'vegetable', 'canned', 'drink', 'water', 'coffee', 'alcohol', 'whiskey', 'beer' },
-        resources = { 'ore', 'wood', 'stone', 'metal', 'coal', 'iron', 'copper', 'gold_nugget', 'silver' },
-        pelts = { 'pelt', 'hide', 'skin', 'fur', 'carcass', 'feather', 'antler', 'claw', 'tooth' },
-        medicine = { 'tonic', 'medicine', 'pills', 'salve', 'remedy', 'bandage', 'health' },
-        tools = { 'tool', 'kit', 'rope', 'bait', 'trap', 'fishing', 'camp', 'tent', 'lantern', 'map' },
-        valuables = { 'gold', 'silver', 'jewel', 'diamond', 'ring', 'necklace', 'watch', 'coin', 'treasure', 'gem' }
-    },
-    
     -- Auction Settings
     MinStartingBid = 1,
     MinDuration = 60,           -- Minimum auction duration in seconds (1 minute)

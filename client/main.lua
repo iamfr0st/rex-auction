@@ -402,7 +402,9 @@ end)
 
 RegisterNetEvent('auction:client:receiveCategories', function(data)
     if not isOpen then return end
-    NUI.SendMessage('receiveCategories', data)
+    NUI.SendMessage('receiveCategories', {
+        categories = data.categories
+    })
 end)
 
 -- Balance update handler - forwards server balance changes to NUI

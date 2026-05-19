@@ -256,43 +256,6 @@ local function isItemBlacklisted(itemName)
     return false
 end
 
--- Resolve item category from config patterns or explicit lists
--- Categories are checked in order defined in Config.Categories for deterministic results
-local function resolveItemCategory(itemName)
-    if not itemName then return nil end
-    local itemNameLower = string.lower(itemName)
-
-    -- Check explicit category items first
-    if Config.Categories then
-        for _, category in ipairs(Config.Categories) do
-            if category.items and #category.items > 0 then
-                for _, catItem in ipairs(category.items) do
-                    if catItem == itemName then
-                        return category.id
-                    end
-                end
-            end
-        end
-    end
-
-    -- Fall back to pattern matching (iterate in category order for priority)
-    if Config.Categories and Config.CategoryPatterns then
-        for _, category in ipairs(Config.Categories) do
-            local catId = category.id
-            local patterns = Config.CategoryPatterns[catId]
-            if patterns then
-                for _, pattern in ipairs(patterns) do
-                    if string.find(itemNameLower, pattern, 1, true) then
-                        return catId
-                    end
-                end
-            end
-        end
-    end
-
-    return 'other'
-end
-
 -- Validate that a category id exists in config
 local function isValidCategory(categoryId)
     if not categoryId or not Config.Categories then return false end
@@ -495,10 +458,14 @@ local function createAuction(src, itemData)
         return { success = false, error = 'Player not found' }
     end
     
-    -- Validate category selection
-    local resolvedCategory = itemData.category or resolveItemCategory(itemData.itemName)
-    if not isValidCategory(resolvedCategory) then
-        resolvedCategory = resolveItemCategory(itemData.itemName)
+    -- Validate category selection (manual selection required - no auto-matching)
+    if not itemData.category or itemData.category == '' then
+        return { success = false, error = 'Please select a category for your auction' }
+    end
+    
+    local selectedCategory = itemData.category
+    if not isValidCategory(selectedCategory) then
+        return { success = false, error = 'Invalid category selected' }
     end
     
     -- Check for duplicate auction (same owner + same item)
@@ -595,7 +562,7 @@ local function createAuction(src, itemData)
             image = imageUrl,
             imageMeta = buildImageMetadata(itemData.itemName)
         },
-        category = resolvedCategory,
+        category = selectedCategory,
         startingBid = itemData.startingBid,
         currentBid = 0,
         highestBidder = nil,
@@ -1170,28 +1137,13 @@ RegisterNetEvent('auction:server:reportMissingImage', function(itemName, imageUr
     logMissingImage(itemName, imageUrl, src)
 end)
 
--- Send categories and resolved item categories to client
+-- Send categories to client
 RegisterNetEvent('auction:server:getCategories', function()
     local src = source
     local categories = getCategoryList()
 
-    -- Resolve category for each item in player inventory
-    local Player = getPlayer(src)
-    local itemCategories = {}
-    if Player then
-        local inventory = Player.PlayerData.items
-        if inventory then
-            for _, item in pairs(inventory) do
-                if item and item.amount > 0 then
-                    itemCategories[item.name] = resolveItemCategory(item.name)
-                end
-            end
-        end
-    end
-
     TriggerClientEvent('auction:client:receiveCategories', src, {
-        categories = categories,
-        itemCategories = itemCategories
+        categories = categories
     })
 end)
 

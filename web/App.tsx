@@ -509,73 +509,6 @@ function CreateAuctionForm({
     return items;
   }, [inventory, searchQuery]);
 
-  // Group inventory by category (simple pattern matching for demo)
-  const inventoryByCategory = useMemo(() => {
-    const grouped: Record<string, InventoryItem[]> = { 'all': filteredInventory };
-
-    if (categories && categories.length > 0) {
-      categories.forEach(cat => {
-        const patternKey = cat.id.toLowerCase();
-        grouped[cat.id] = filteredInventory.filter(item => {
-          const nameLower = item.name.toLowerCase();
-          const labelLower = item.label.toLowerCase();
-
-          // Simple pattern matching based on category
-          switch (cat.id) {
-            case 'weapons':
-              return nameLower.includes('revolver') || nameLower.includes('pistol') ||
-                     nameLower.includes('rifle') || nameLower.includes('shotgun') ||
-                     nameLower.includes('bow') || nameLower.includes('knife') ||
-                     nameLower.includes('weapon') || nameLower.includes('tomahawk');
-            case 'ammunition':
-              return nameLower.includes('ammo') || nameLower.includes('arrow') ||
-                     nameLower.includes('bullet') || nameLower.includes('shell');
-            case 'clothing':
-              return nameLower.includes('shirt') || nameLower.includes('pants') ||
-                     nameLower.includes('hat') || nameLower.includes('coat') ||
-                     nameLower.includes('vest') || nameLower.includes('boots') ||
-                     nameLower.includes('outfit') || nameLower.includes('clothing');
-            case 'food':
-              return nameLower.includes('meat') || nameLower.includes('fish') ||
-                     nameLower.includes('bread') || nameLower.includes('fruit') ||
-                     nameLower.includes('drink') || nameLower.includes('food') ||
-                     nameLower.includes('canned') || nameLower.includes('alcohol');
-            case 'resources':
-              return nameLower.includes('ore') || nameLower.includes('wood') ||
-                     nameLower.includes('stone') || nameLower.includes('metal') ||
-                     nameLower.includes('coal') || nameLower.includes('iron') ||
-                     nameLower.includes('gold_nugget') || nameLower.includes('silver');
-            case 'pelts':
-              return nameLower.includes('pelt') || nameLower.includes('hide') ||
-                     nameLower.includes('skin') || nameLower.includes('fur') ||
-                     nameLower.includes('carcass') || nameLower.includes('feather');
-            case 'medicine':
-              return nameLower.includes('tonic') || nameLower.includes('medicine') ||
-                     nameLower.includes('pills') || nameLower.includes('health') ||
-                     nameLower.includes('remedy');
-            case 'tools':
-              return nameLower.includes('tool') || nameLower.includes('kit') ||
-                     nameLower.includes('rope') || nameLower.includes('bait') ||
-                     nameLower.includes('fishing') || nameLower.includes('camp');
-            case 'valuables':
-              return nameLower.includes('gold') || nameLower.includes('silver') ||
-                     nameLower.includes('jewel') || nameLower.includes('diamond') ||
-                     nameLower.includes('ring') || nameLower.includes('coin') ||
-                     nameLower.includes('gem') || nameLower.includes('treasure');
-            default:
-              return false;
-          }
-        });
-      });
-    }
-
-    return grouped;
-  }, [filteredInventory, categories]);
-
-  const displayItems = selectedCategory && selectedCategory !== 'all'
-    ? (inventoryByCategory[selectedCategory] || [])
-    : filteredInventory;
-
   // Calculate local fee preview (client-side for responsiveness)
   const localFeePreview = useMemo(() => {
     if (!feeConfig || !feeConfig.enabled) {
@@ -609,7 +542,7 @@ function CreateAuctionForm({
   }, [feeConfig, duration, count]);
 
   const canAffordFee = playerFunds >= localFeePreview.total;
-  const selectedCategoryLabel = categories?.find(c => c.id === selectedCategory)?.label || 'All Items';
+  const selectedCategoryLabel = categories?.find(c => c.id === selectedCategory)?.label || '';
 
   const handleSubmit = (e: import('react').FormEvent) => {
     e.preventDefault();
@@ -638,73 +571,31 @@ function CreateAuctionForm({
   ];
 
   return (
-    <div className="h-full flex">
-      {/* Category Sidebar */}
-      <div className="w-44 border-r border-stone-700 flex flex-col bg-stone-900/50">
-        <div className="p-3 border-b border-stone-700">
-          <h3 className="text-stone-400 text-xs uppercase tracking-wide">Categories</h3>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          <button
-            type="button"
-            onClick={() => setSelectedCategory('')}
-            className={`w-full text-left px-3 py-2 rounded-lg mb-1 text-sm transition-colors ${
-              !selectedCategory ? 'bg-amber-900/50 text-amber-200' : 'text-stone-400 hover:bg-stone-800'
-            }`}
-          >
-            📦 All Items
-          </button>
-          {categories?.map(cat => (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => setSelectedCategory(cat.id)}
-              className={`w-full text-left px-3 py-2 rounded-lg mb-1 text-sm transition-colors ${
-                selectedCategory === cat.id ? 'bg-amber-900/50 text-amber-200' : 'text-stone-400 hover:bg-stone-800'
-              }`}
-            >
-              {cat.icon} {cat.label}
-            </button>
-          ))}
-        </div>
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between p-4 border-b border-stone-700">
+        <h2 className="text-xl font-semibold text-white">Create Auction</h2>
+        <button onClick={onClose} className="text-stone-400 hover:text-white text-lg">✕</button>
       </div>
 
-      {/* Main Form */}
-      <div className="flex-1 flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-stone-700">
-          <h2 className="text-xl font-semibold text-white">Create Auction</h2>
-          <button onClick={onClose} className="text-stone-400 hover:text-white text-lg">✕</button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Category Selection Required */}
-          {!selectedCategory && (
-            <div className="bg-amber-950/50 border border-amber-700 rounded-lg p-4">
-              <p className="text-amber-200 text-sm">
-                <span className="font-bold">Step 1:</span> Select a category from the sidebar to filter items
+      <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Item Selection */}
+        <div>
+          <label className="block text-stone-300 text-sm mb-2">Select Item</label>
+          <input
+            type="text"
+            placeholder="Search inventory..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white placeholder-stone-500 focus:outline-none focus:border-amber-600 mb-2"
+          />
+          <div className="max-h-52 overflow-y-auto border border-stone-700 rounded-lg">
+            {filteredInventory.length === 0 ? (
+              <p className="p-3 text-stone-500 text-sm text-center">
+                No items found
               </p>
-            </div>
-          )}
-
-          {/* Item Selection */}
-          <div>
-            <label className="block text-stone-300 text-sm mb-2">
-              {selectedCategory ? `Select Item (${selectedCategoryLabel})` : 'Select Item'}
-            </label>
-            <input
-              type="text"
-              placeholder="Search inventory..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white placeholder-stone-500 focus:outline-none focus:border-amber-600 mb-2"
-            />
-            <div className="max-h-52 overflow-y-auto border border-stone-700 rounded-lg">
-              {displayItems.length === 0 ? (
-                <p className="p-3 text-stone-500 text-sm text-center">
-                  {selectedCategory ? `No items in ${selectedCategoryLabel}` : 'No items found'}
-                </p>
-              ) : (
-                displayItems.map((item) => (
+            ) : (
+              filteredInventory.map((item) => (
                   <div
                     key={item.name}
                     onClick={() => {
@@ -790,6 +681,21 @@ function CreateAuctionForm({
                 >
                   {durationOptions.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Category */}
+              <div>
+                <label className="block text-stone-300 text-sm mb-2">Category</label>
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
+                >
+                  <option value="">Select a category...</option>
+                  {categories?.map(cat => (
+                    <option key={cat.id} value={cat.id}>{cat.icon} {cat.label}</option>
                   ))}
                 </select>
               </div>
@@ -889,7 +795,6 @@ function CreateAuctionForm({
             </>
           )}
         </form>
-      </div>
     </div>
   );
 }
