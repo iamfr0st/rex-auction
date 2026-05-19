@@ -6,9 +6,11 @@ A real-time auction house system for RedM servers running RSG Framework. Players
 
 - **Real-time Auctions**: Live bidding with instant updates across all connected players
 - **NPC Auctioneers**: Interact with NPCs using ox_target to open the auction UI
+- **Item Categories**: Organize auctions by category with automatic item classification
+- **Collection Kiosk**: Winners collect items and sellers collect money at the auctioneer NPC
 - **Item Escrow**: Items are held securely during active auctions
 - **Bid Escrow**: Bid amounts are held and automatically refunded if outbid
-- **Offline Payouts**: Winners and sellers receive items/money even if offline during auction end
+- **Offline Queuing**: Pending collections are saved and available when players reconnect
 - **Discord Webhooks**: Optional notifications for auction events (created, bids, wins, expires)
 - **High Value Alerts**: Separate webhook notifications for high-value sales
 - **Admin Commands**: In-game webhook configuration for server staff
@@ -171,6 +173,39 @@ Config = {
 }
 ```
 
+### Categories (`config.lua`)
+
+Categories organize auctions in the UI. Players select a category when creating an auction, and can filter by category when browsing.
+
+```lua
+Config.Categories = {
+    { id = 'valuables', label = 'Valuables', icon = 'fa-gem', description = 'Gold, jewelry, and other valuables' },
+    { id = 'weapons', label = 'Weapons', icon = 'fa-crosshairs', description = 'Firearms, melee weapons, and ammunition' },
+    { id = 'pelts', label = 'Pelts & Hides', icon = 'fa-paw', description = 'Animal pelts, hides, and leather' },
+    { id = 'herbs', label = 'Herbs & Plants', icon = 'fa-leaf', description = 'Medicinal plants and ingredients' },
+    { id = 'provisions', label = 'Provisions', icon = 'fa-drumstick-bite', description = 'Food, drinks, and consumables' },
+    { id = 'materials', label = 'Materials', icon = 'fa-box', description = 'Crafting materials and resources' },
+    { id = 'other', label = 'Other', icon = 'fa-ellipsis', description = 'Miscellaneous items' },
+}
+```
+
+#### Automatic Category Assignment
+
+Items can be automatically assigned to categories based on their name using pattern matching:
+
+```lua
+Config.CategoryPatterns = {
+    valuables = { 'gold', 'silver', 'diamond', 'ring', 'watch', 'jewel' },
+    weapons = { 'pistol', 'rifle', 'shotgun', 'knife', 'bow', 'ammo' },
+    pelts = { 'pelt', 'hide', 'fur', 'leather', 'skin' },
+    herbs = { 'herb', 'plant', 'flower', 'mushroom', 'root' },
+    provisions = { 'meat', 'fish', 'bread', 'whiskey', 'coffee', 'canned' },
+    materials = { 'wood', 'metal', 'cloth', 'feather', 'ore' },
+}
+```
+
+When a player creates an auction, the system checks the item name against these patterns. If no pattern matches, the item defaults to "other". Players can override the suggested category when listing.
+
 ### Discord Webhooks
 
 Configure webhooks in `config.lua`:
@@ -220,10 +255,25 @@ Config.Webhooks = {
 
 ### Player Actions
 
-1. **List an Item**: Approach an NPC auctioneer, interact via ox_target, select an item from your inventory, set starting bid and duration
-2. **Place a Bid**: Browse active auctions, enter your bid amount (must be 5% higher than current bid)
+1. **List an Item**: Approach an NPC auctioneer, interact via ox_target, select an item from your inventory, choose a category, set starting bid and duration
+2. **Place a Bid**: Browse active auctions by category, enter your bid amount (must be 5% higher than current bid)
 3. **Cancel Auction**: Cancel your own auctions (only if no bids placed)
-4. **Claim Payouts**: Pending payouts are delivered automatically when you connect
+4. **Collect Winnings**: When you win an auction, visit the auctioneer NPC and use the "Collect Items" tab to claim your items
+5. **Collect Earnings**: When your auction sells, visit the auctioneer NPC to collect your money
+
+### Collection System
+
+When an auction ends, items and money are **not** automatically delivered. Instead, they are held at the auctioneer for collection:
+
+- **Winners**: Must visit an auctioneer NPC and collect won items from the "Collect Items" tab
+- **Sellers**: Must visit an auctioneer NPC to collect the sale proceeds
+- **Inventory Check**: Items can only be collected if you have sufficient inventory space
+- **Persistence**: Pending collections are saved and remain available even after server restarts or player disconnects
+
+The collection UI shows:
+- Item name, quantity, and image
+- Money amounts owed
+- Collection status (pending/collected)
 
 ### Admin Commands
 
@@ -259,13 +309,24 @@ Events available for external resources:
 -- Get all active auctions
 TriggerServerEvent('auction:server:getAuctions')
 
+-- Get available categories
+TriggerServerEvent('auction:server:getCategories')
+
+-- Search auctions with filters
+TriggerServerEvent('auction:server:searchAuctions', {
+    query = 'gold',
+    category = 'valuables',
+    sortBy = 'price_asc'
+})
+
 -- Create a new auction
 TriggerServerEvent('auction:server:createAuction', {
     itemName = 'apple',
     itemLabel = 'Apple',
     count = 10,
     startingBid = 50,
-    duration = 3600
+    duration = 3600,
+    category = 'provisions'  -- Category ID from Config.Categories
 })
 
 -- Place a bid
@@ -273,6 +334,15 @@ TriggerServerEvent('auction:server:placeBid', auctionId, bidAmount)
 
 -- Cancel an auction
 TriggerServerEvent('auction:server:cancelAuction', auctionId)
+
+-- Get pending collections (items/money to collect)
+TriggerServerEvent('auction:server:getPendingCollections')
+
+-- Collect a pending item
+TriggerServerEvent('auction:server:collectItem', itemIndex)
+
+-- Collect pending money
+TriggerServerEvent('auction:server:collectMoney', moneyIndex)
 ```
 
 ### Client Events (Listen for responses)
@@ -284,9 +354,28 @@ RegisterNetEvent('auction:client:receiveAuctions', function(data)
     -- data.bidHistory - table of bid histories
 end)
 
+-- Receive category list
+RegisterNetEvent('auction:client:receiveCategories', function(categories)
+    -- categories - table of { id, label, icon, description }
+end)
+
+-- Receive pending collections
+RegisterNetEvent('auction:client:receivePendingCollections', function(data)
+    -- data.items - table of items waiting to be collected
+    -- data.money - table of money amounts waiting to be collected
+end)
+
+-- Collection result
+RegisterNetEvent('auction:client:collectionResult', function(data)
+    -- data.success - boolean
+    -- data.error - error message if failed
+    -- data.type - 'item' or 'money'
+end)
+
 -- Notification events
 RegisterNetEvent('auction:client:notification', function(data)
-    -- data.type: 'won', 'sold', 'outbid', 'expired', 'payoutMoney', 'payoutItem'
+    -- data.type: 'won', 'sold', 'outbid', 'expired', 'info'
+    -- data.message: notification text
 end)
 ```
 
@@ -385,10 +474,11 @@ rex-auction/
 **Symptom**: Won auction but didn't receive item or money
 
 **Solutions**:
-1. Check `PendingPayouts` in `auctions.json` - offline payouts are queued
-2. Player must reconnect to receive pending payouts
-3. Verify RSGCore `AddItem` and `AddMoney` functions work correctly
-4. Check server console for delivery errors
+1. Items and money must be collected at an auctioneer NPC via the "Collect Items" tab
+2. Check `PendingCollections` in `auctions.json` - uncollected items are persisted
+3. Ensure player has sufficient inventory space before collecting items
+4. Check server console for delivery errors during collection
+5. Verify RSGCore `AddItem` and `AddMoney` functions work correctly
 
 ## Support
 

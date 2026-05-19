@@ -118,6 +118,33 @@ interface Category {
 
 type ViewMode = 'card' | 'list';
 
+// Pending Collection Types
+interface PendingItem {
+  itemName: string;
+  itemLabel: string;
+  count: number;
+  metadata: Record<string, any>;
+  auctionId: string;
+  image?: string;
+  imageMeta?: ImageMeta;
+  soldFor: number;
+  sellerName: string;
+  collectedAt?: number;
+}
+
+interface PendingMoney {
+  amount: number;
+  reason: string;
+  auctionId?: string;
+  itemName?: string;
+  collectedAt?: number;
+}
+
+interface PendingCollections {
+  money: PendingMoney | null;
+  items: PendingItem[];
+}
+
 // Image cache for tracking loaded images across components
 const imageCache: Record<string, { loaded: boolean; failed: boolean }> = {};
 
@@ -1121,10 +1148,149 @@ function CategorySidebar({
   );
 }
 
+// Collection Kiosk Component
+function CollectionKiosk({
+  pendingCollections,
+  onCollectItem,
+  onCollectMoney,
+  collectingItem,
+  collectingMoney,
+  onBack
+}: {
+  pendingCollections: PendingCollections;
+  onCollectItem: (auctionId: string, itemName: string) => void;
+  onCollectMoney: () => void;
+  collectingItem: string | null;
+  collectingMoney: boolean;
+  onBack: () => void;
+}) {
+  const hasItems = pendingCollections.items.length > 0;
+  const hasMoney = pendingCollections.money && pendingCollections.money.amount > 0;
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="p-4 border-b border-stone-700">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="text-stone-400 hover:text-white text-lg">←</button>
+          <div className="flex-1">
+            <h2 className="text-xl font-semibold text-white">Collection Kiosk</h2>
+            <p className="text-stone-500 text-xs">Collect your winnings and sales</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* No collections message */}
+        {!hasItems && !hasMoney && (
+          <div className="h-64 flex items-center justify-center">
+            <div className="text-center">
+              <p className="text-4xl text-stone-700 mb-2">📭</p>
+              <p className="text-stone-500">No pending collections</p>
+              <p className="text-stone-600 text-sm mt-1">Win auctions or sell items to collect here</p>
+            </div>
+          </div>
+        )}
+
+        {/* Money Section */}
+        {hasMoney && (
+          <div className="bg-gradient-to-r from-amber-900/40 to-amber-800/20 border border-amber-700/50 rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 bg-amber-800/50 rounded-xl flex items-center justify-center">
+                  <span className="text-2xl">💰</span>
+                </div>
+                <div>
+                  <p className="text-amber-300 text-sm font-medium">Sales Earnings</p>
+                  <p className="text-white text-2xl font-bold">
+                    ${pendingCollections.money!.amount.toLocaleString()}
+                  </p>
+                  <p className="text-stone-400 text-xs mt-1">
+                    {pendingCollections.money!.reason}
+                    {pendingCollections.money!.itemName && ` - ${pendingCollections.money!.itemName}`}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={onCollectMoney}
+                disabled={collectingMoney}
+                className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
+                  collectingMoney
+                    ? 'bg-stone-700 text-stone-400 cursor-wait'
+                    : 'bg-amber-700 hover:bg-amber-600 text-white'
+                }`}
+              >
+                {collectingMoney ? 'Collecting...' : 'Collect'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Items Section */}
+        {hasItems && (
+          <div>
+            <h3 className="text-stone-400 text-sm font-medium mb-3 uppercase tracking-wide">
+              Won Items ({pendingCollections.items.length})
+            </h3>
+            <div className="space-y-3">
+              {pendingCollections.items.map((item, index) => (
+                <div
+                  key={`${item.auctionId}-${index}`}
+                  className="bg-stone-900/50 border border-stone-700 rounded-xl p-4 hover:border-stone-600 transition-colors"
+                >
+                  <div className="flex items-center gap-4">
+                    <AsyncImage
+                      imageMeta={item.imageMeta}
+                      alt={item.itemLabel}
+                      className="w-16 h-16 rounded-lg flex-shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-medium truncate">{item.itemLabel}</p>
+                      <p className="text-stone-400 text-sm">Quantity: {item.count}</p>
+                      {item.soldFor > 0 && (
+                        <p className="text-amber-400 text-sm mt-1">
+                          Won for ${item.soldFor.toLocaleString()}
+                        </p>
+                      )}
+                      <p className="text-stone-500 text-xs mt-1">
+                        From: {item.sellerName}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => onCollectItem(item.auctionId, item.itemName)}
+                      disabled={collectingItem === item.auctionId}
+                      className={`px-5 py-2.5 rounded-lg font-medium transition-colors ${
+                        collectingItem === item.auctionId
+                          ? 'bg-stone-700 text-stone-400 cursor-wait'
+                          : 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                      }`}
+                    >
+                      {collectingItem === item.auctionId ? 'Collecting...' : 'Collect'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Footer Info */}
+      {(hasItems || hasMoney) && (
+        <div className="p-4 border-t border-stone-700 bg-stone-900/50">
+          <p className="text-stone-500 text-xs text-center">
+            Items are collected to your inventory. Money is deposited to your bank.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Main App Component
 export default function App() {
   const [visible, setVisible] = useState(isDebug);
-  const [view, setView] = useState<'list' | 'create' | 'detail'>('list');
+  const [view, setView] = useState<'list' | 'create' | 'detail' | 'collect'>('list');
   const [playerData, setPlayerData] = useState<PlayerData>({
     inventory: [],
     cash: 0,
@@ -1152,6 +1318,9 @@ export default function App() {
     query: ''
   });
   const [isSearching, setIsSearching] = useState(false);
+  const [pendingCollections, setPendingCollections] = useState<PendingCollections>({ money: null, items: [] });
+  const [collectingItem, setCollectingItem] = useState<string | null>(null);
+  const [collectingMoney, setCollectingMoney] = useState(false);
 
   // Add notification helper
   const addNotification = useCallback((notification: Omit<Notification, 'id'>) => {
@@ -1304,9 +1473,56 @@ export default function App() {
     setPlayerData(prev => ({ ...prev, inventory: data.inventory }));
   });
 
+  // Balance update handler - receives real-time balance changes from server
+  useNuiEvent('balanceUpdated', (data: { cash: number; bank: number }) => {
+    setPlayerData(prev => ({ ...prev, cash: data.cash, bank: data.bank }));
+  });
+
   useNuiEvent('feePreview', (data: FeePreview) => {
     // Fee preview is calculated client-side for responsiveness
     // This handler is available for server-side validation if needed
+  });
+
+  // Collection system event handlers
+  useNuiEvent('receivePendingCollections', (data: PendingCollections) => {
+    setPendingCollections(data);
+  });
+
+  useNuiEvent('collectionResult', (result: { success: boolean; error?: string; type: 'item' | 'money'; itemName?: string; itemLabel?: string; count?: number; amount?: number }) => {
+    if (result.success) {
+      if (result.type === 'item') {
+        setCollectingItem(null);
+        // Remove collected item from pending
+        setPendingCollections(prev => ({
+          ...prev,
+          items: prev.items.filter(item => item.auctionId !== result.itemName)
+        }));
+        addNotification({
+          type: 'success',
+          title: 'Item Collected',
+          message: `Collected ${result.itemLabel} x${result.count}`
+        });
+        // Refresh collections
+        fetchNui('getPendingCollections', {}, { money: null, items: [] });
+      } else if (result.type === 'money') {
+        setCollectingMoney(false);
+        setPendingCollections(prev => ({ ...prev, money: null }));
+        addNotification({
+          type: 'success',
+          title: 'Money Collected',
+          message: `Collected $${result.amount?.toLocaleString()}`
+        });
+        fetchNui('getPendingCollections', {}, { money: null, items: [] });
+      }
+    } else {
+      setCollectingItem(null);
+      setCollectingMoney(false);
+      addNotification({
+        type: 'error',
+        title: 'Collection Failed',
+        message: result.error || 'Unknown error'
+      });
+    }
   });
 
   // NUI Actions
@@ -1326,6 +1542,21 @@ export default function App() {
 
   const handleCancelAuction = useCallback((auctionId: string) => {
     fetchNui('cancelAuction', { auctionId }, { success: true });
+  }, []);
+
+  // Collection handlers
+  const handleGetPendingCollections = useCallback(() => {
+    fetchNui('getPendingCollections', {}, { money: null, items: [] });
+  }, []);
+
+  const handleCollectItem = useCallback((auctionId: string, itemName: string) => {
+    setCollectingItem(auctionId);
+    fetchNui('collectItem', { auctionId, itemName }, { success: true });
+  }, []);
+
+  const handleCollectMoney = useCallback(() => {
+    setCollectingMoney(true);
+    fetchNui('collectMoney', {}, { success: true });
   }, []);
 
   // Search and pagination handlers
@@ -1458,6 +1689,48 @@ export default function App() {
           { playerId: 8, playerName: 'Hosea Matthews', citizenid: 'citizen8', amount: 200, timestamp: Math.floor(Date.now() / 1000) - 1200 },
         ]
       });
+
+      // Mock pending collections
+      setPendingCollections({
+        money: {
+          amount: 1250,
+          reason: 'Auction sale',
+          auctionId: 'AUC_4',
+          itemName: 'Schofield Revolver'
+        },
+        items: [
+          {
+            itemName: 'pelt_bear',
+            itemLabel: 'Perfect Bear Pelt',
+            count: 1,
+            metadata: { quality: 'perfect' },
+            auctionId: 'AUC_3',
+            image: 'nui://rsg-inventory/html/images/pelt_bear.png',
+            imageMeta: {
+              url: 'nui://rsg-inventory/html/images/pelt_bear.png',
+              itemName: 'pelt_bear',
+              fallbackUrl: 'nui://rex-auction/web/dist/fallback.svg'
+            },
+            soldFor: 350,
+            sellerName: 'Sadie Adler'
+          },
+          {
+            itemName: 'gold_nugget',
+            itemLabel: 'Gold Nugget',
+            count: 5,
+            metadata: {},
+            auctionId: 'AUC_5',
+            image: 'nui://rsg-inventory/html/images/gold_nugget.png',
+            imageMeta: {
+              url: 'nui://rsg-inventory/html/images/gold_nugget.png',
+              itemName: 'gold_nugget',
+              fallbackUrl: 'nui://rex-auction/web/dist/fallback.svg'
+            },
+            soldFor: 500,
+            sellerName: 'Dutch van der Linde'
+          }
+        ]
+      });
     }
   }, []);
 
@@ -1515,6 +1788,22 @@ export default function App() {
               }`}
             >
               Create Auction
+            </button>
+            <button
+              onClick={() => {
+                setView('collect');
+                handleGetPendingCollections();
+              }}
+              className={`w-full text-left px-3 py-2 rounded-lg mb-1 text-sm transition-colors flex items-center justify-between ${
+                view === 'collect' ? 'bg-amber-900/50 text-amber-200' : 'text-stone-400 hover:bg-stone-800'
+              }`}
+            >
+              <span>Collect Items</span>
+              {(pendingCollections.items.length > 0 || pendingCollections.money) && (
+                <span className="bg-amber-600 text-white text-xs px-2 py-0.5 rounded-full">
+                  {pendingCollections.items.length + (pendingCollections.money ? 1 : 0)}
+                </span>
+              )}
             </button>
           </nav>
 
@@ -1786,6 +2075,17 @@ export default function App() {
               onCancel={() => handleCancelAuction(selectedAuction.id)}
               onBack={() => { setView('list'); setSelectedAuctionId(null); }}
               categories={playerData.categories}
+            />
+          )}
+
+          {view === 'collect' && (
+            <CollectionKiosk
+              pendingCollections={pendingCollections}
+              onCollectItem={handleCollectItem}
+              onCollectMoney={handleCollectMoney}
+              collectingItem={collectingItem}
+              collectingMoney={collectingMoney}
+              onBack={() => setView('list')}
             />
           )}
         </div>

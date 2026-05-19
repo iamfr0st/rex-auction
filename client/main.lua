@@ -142,6 +142,9 @@ function NUI.Open(data)
     
     -- Request current auctions
     TriggerServerEvent('auction:server:getAuctions')
+    
+    -- Also request pending collections
+    TriggerServerEvent('auction:server:getPendingCollections')
 end
 
 function NUI.Close()
@@ -243,6 +246,11 @@ RegisterNuiCallback('getCategories', function(_, cb)
     cb({ success = true })
 end)
 
+RegisterNuiCallback('getBalance', function(_, cb)
+    TriggerServerEvent('auction:server:getBalance')
+    cb({ success = true })
+end)
+
 RegisterNuiCallback('searchAuctions', function(data, cb)
     -- Get player citizenid for filtering
     local PlayerData = RSGCore.Functions.GetPlayerData()
@@ -257,6 +265,27 @@ RegisterNuiCallback('searchAuctions', function(data, cb)
         category = data.category or nil
     })
     cb({ success = true })
+end)
+
+-- Collection system callbacks
+RegisterNuiCallback('getPendingCollections', function(_, cb)
+    TriggerServerEvent('auction:server:getPendingCollections')
+    cb({ success = true })
+end)
+
+RegisterNuiCallback('collectItem', function(data, cb)
+    if not data.auctionId or not data.itemName then
+        cb({ success = false, error = 'Invalid item data' })
+        return
+    end
+    
+    TriggerServerEvent('auction:server:collectItem', data.auctionId, data.itemName)
+    cb({ success = true, message = 'Collecting item...' })
+end)
+
+RegisterNuiCallback('collectMoney', function(_, cb)
+    TriggerServerEvent('auction:server:collectMoney')
+    cb({ success = true, message = 'Collecting money...' })
 end)
 
 -- Image load status from NUI
@@ -337,19 +366,25 @@ RegisterNetEvent('auction:client:notification', function(data)
     elseif data.type == 'won' then
         lib.notify({
             title = 'Auction Won!',
-            description = ('You won %s x%d for $%d!'):format(data.itemName, data.count, data.amount),
+            description = ('You won %s x%d for $%d! Visit the auctioneer to collect.'):format(data.itemName, data.count, data.amount),
             type = 'success'
         })
     elseif data.type == 'sold' then
         lib.notify({
             title = 'Auction Sold!',
-            description = ('Your %s x%d sold for $%d!'):format(data.itemName, data.count, data.amount),
+            description = ('Your %s x%d sold for $%d! Visit the auctioneer to collect your earnings.'):format(data.itemName, data.count, data.amount),
             type = 'success'
         })
     elseif data.type == 'expired' then
         lib.notify({
             title = 'Auction Expired',
-            description = ('Your %s x%d auction expired with no bids. Item returned.'):format(data.itemName, data.count),
+            description = ('Your %s x%d auction expired with no bids. Visit the auctioneer to retrieve your item.'):format(data.itemName, data.count),
+            type = 'info'
+        })
+    elseif data.type == 'info' and data.message then
+        lib.notify({
+            title = 'Auction House',
+            description = data.message,
             type = 'info'
         })
     end
@@ -368,6 +403,32 @@ end)
 RegisterNetEvent('auction:client:receiveCategories', function(data)
     if not isOpen then return end
     NUI.SendMessage('receiveCategories', data)
+end)
+
+-- Balance update handler - forwards server balance changes to NUI
+RegisterNetEvent('auction:client:balanceUpdated', function(data)
+    -- Forward balance update to NUI regardless of UI state
+    -- This ensures the UI always has current balance when opened
+    NUI.SendMessage('balanceUpdated', data)
+end)
+
+-- Collection system event handlers
+RegisterNetEvent('auction:client:receivePendingCollections', function(data)
+    if not isOpen then return end
+    NUI.SendMessage('receivePendingCollections', data)
+end)
+
+RegisterNetEvent('auction:client:collectionResult', function(result)
+    if not isOpen then return end
+    NUI.SendMessage('collectionResult', result)
+    
+    if result.success then
+        -- Refresh inventory if item was collected
+        if result.type == 'item' then
+            refreshInventory()
+            NUI.SendMessage('inventoryUpdated', { inventory = playerInventory })
+        end
+    end
 end)
 
 -- Webhook admin command results

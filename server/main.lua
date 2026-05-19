@@ -9,7 +9,7 @@ local Escrow = {
 }
 local BidHistory = {}  -- [auctionId] = { { playerId, playerName, amount, timestamp } }
 local AuctionEndTimers = {}  -- [auctionId] = timerId
-local PendingPayouts = {}  -- [citizenid] = { money = amount, items = { { itemName, count, metadata, auctionId } } }
+local PendingCollections = {}  -- [citizenid] = { money = { amount, reason, auctionId? }, items = { { itemName, itemLabel, count, metadata, auctionId, image, soldFor, sellerName, collectedAt } } }
 
 local SAVE_FILE = 'auctions.json'
 local AUCTION_ID_PREFIX = 'AUC'
@@ -67,7 +67,7 @@ local function saveAuctions()
         auctions = Auctions,
         escrow = Escrow,
         bidHistory = BidHistory,
-        pendingPayouts = PendingPayouts
+        pendingCollections = PendingCollections
     }
     SaveResourceFile(GetCurrentResourceName(), SAVE_FILE, json.encode(saveData, { indent = true }), -1)
 end
@@ -80,7 +80,8 @@ local function loadAuctions()
             Auctions = decoded.auctions or {}
             Escrow = decoded.escrow or { items = {}, funds = {} }
             BidHistory = decoded.bidHistory or {}
-            PendingPayouts = decoded.pendingPayouts or {}
+            -- Support both old and new format for backwards compatibility
+            PendingCollections = decoded.pendingCollections or decoded.pendingPayouts or {}
             
             -- Backfill images for existing auctions
             for auctionId, auction in pairs(Auctions) do
@@ -150,9 +151,18 @@ end
 local function addPlayerItem(src, itemName, count, metadata)
     local Player = getPlayer(src)
     if not Player then return false end
-    
+
+    -- Get current count before adding
+    local currentSlot = Player.Functions.GetItemByName(itemName)
+    local countBefore = currentSlot and currentSlot.amount or 0
+
     Player.Functions.AddItem(itemName, count, false, metadata)
-    return true
+
+    -- Verify item was added (RSGCore doesn't return success, so we check after)
+    local slotAfter = Player.Functions.GetItemByName(itemName)
+    local countAfter = slotAfter and slotAfter.amount or 0
+
+    return countAfter >= countBefore + count
 end
 
 local function getPlayerMoney(src)
@@ -163,27 +173,39 @@ local function getPlayerMoney(src)
     return money['cash'] or 0, money['bank'] or 0
 end
 
-local function removePlayerMoney(src, amount)
+-- Emit balance update to client for NUI sync
+local function emitBalanceUpdate(src)
+    local cash, bank = getPlayerMoney(src)
+    TriggerClientEvent('auction:client:balanceUpdated', src, {
+        cash = cash,
+        bank = bank
+    })
+end
+
+local function removePlayerMoney(src, amount, silent)
     local Player = getPlayer(src)
     if not Player then return false end
     
     local cash, bank = getPlayerMoney(src)
     if cash >= amount then
         Player.Functions.RemoveMoney('cash', amount)
+        if not silent then emitBalanceUpdate(src) end
         return true
     elseif cash + bank >= amount then
         Player.Functions.RemoveMoney('cash', cash)
         Player.Functions.RemoveMoney('bank', amount - cash)
+        if not silent then emitBalanceUpdate(src) end
         return true
     end
     return false
 end
 
-local function addPlayerMoney(src, amount)
+local function addPlayerMoney(src, amount, silent)
     local Player = getPlayer(src)
     if not Player then return false end
     
     Player.Functions.AddMoney('bank', amount)
+    if not silent then emitBalanceUpdate(src) end
     return true
 end
 
@@ -376,71 +398,91 @@ local function getFeeBreakdown(durationSeconds, quantity)
 end
 
 -- ============================================
--- PENDING PAYOUT SYSTEM
+-- PENDING COLLECTION SYSTEM
 -- ============================================
 
-local function queueMoneyPayout(citizenid, amount, reason)
-    if not PendingPayouts[citizenid] then
-        PendingPayouts[citizenid] = { money = 0, items = {} }
+-- Queue money for collection at auctioneer (for sellers)
+local function queueMoneyCollection(citizenid, amount, reason, auctionId, itemName, sellerName)
+    if not PendingCollections[citizenid] then
+        PendingCollections[citizenid] = { money = nil, items = {} }
     end
-    PendingPayouts[citizenid].money = PendingPayouts[citizenid].money + amount
-    print(('[Auction] Queued $%d money payout for %s (%s)'):format(amount, citizenid, reason or 'unknown'))
+    PendingCollections[citizenid].money = {
+        amount = amount,
+        reason = reason or 'auction sale',
+        auctionId = auctionId,
+        itemName = itemName,
+        collectedAt = nil
+    }
+    print(('[Auction] Queued $%d money collection for %s (%s)'):format(amount, citizenid, reason or 'unknown'))
     saveAuctions()
 end
 
-local function queueItemPayout(citizenid, itemName, count, metadata, auctionId)
-    if not PendingPayouts[citizenid] then
-        PendingPayouts[citizenid] = { money = 0, items = {} }
+-- Queue item for collection at auctioneer (for winners)
+local function queueItemCollection(citizenid, itemName, itemLabel, count, metadata, auctionId, image, soldFor, sellerName)
+    if not PendingCollections[citizenid] then
+        PendingCollections[citizenid] = { money = nil, items = {} }
     end
-    table.insert(PendingPayouts[citizenid].items, {
+    table.insert(PendingCollections[citizenid].items, {
         itemName = itemName,
+        itemLabel = itemLabel or itemName,
         count = count,
         metadata = metadata,
-        auctionId = auctionId
+        auctionId = auctionId,
+        image = image,
+        imageMeta = buildImageMetadata(itemName),
+        soldFor = soldFor,
+        sellerName = sellerName,
+        collectedAt = nil
     })
-    print(('[Auction] Queued item %s x%d for %s'):format(itemName, count, citizenid))
+    print(('[Auction] Queued item %s x%d for collection by %s'):format(itemName, count, citizenid))
     saveAuctions()
 end
 
-local function deliverPendingPayouts(src)
-    local Player = getPlayer(src)
-    if not Player then return end
-    
-    local citizenid = Player.PlayerData.citizenid
-    local payout = PendingPayouts[citizenid]
-    
-    if not payout then return end
-    
-    local delivered = false
-    
-    -- Deliver money
-    if payout.money and payout.money > 0 then
-        addPlayerMoney(src, payout.money)
-        TriggerClientEvent('auction:client:notification', src, {
-            type = 'payoutMoney',
-            amount = payout.money
-        })
-        print(('[Auction] Delivered $%d to %s'):format(payout.money, citizenid))
-        delivered = true
+-- Get pending collections for a player
+local function getPendingCollections(citizenid)
+    local collections = PendingCollections[citizenid]
+    if not collections then
+        return { money = nil, items = {} }
     end
     
-    -- Deliver items
-    for _, item in ipairs(payout.items) do
-        addPlayerItem(src, item.itemName, item.count, item.metadata)
-        TriggerClientEvent('auction:client:notification', src, {
-            type = 'payoutItem',
-            itemName = item.itemName,
-            count = item.count
-        })
-        print(('[Auction] Delivered %s x%d to %s'):format(item.itemName, item.count, citizenid))
-        delivered = true
+    -- Filter out already collected items
+    local pendingItems = {}
+    for _, item in ipairs(collections.items) do
+        if not item.collectedAt then
+            table.insert(pendingItems, item)
+        end
     end
     
-    -- Clear delivered payouts
-    if delivered then
-        PendingPayouts[citizenid] = nil
-        saveAuctions()
+    local pendingMoney = collections.money and not collections.money.collectedAt and collections.money or nil
+    
+    return {
+        money = pendingMoney,
+        items = pendingItems
+    }
+end
+
+-- Check if player is near any auctioneer NPC (server-side validation)
+local function isPlayerNearAuctioneer(src)
+    local ped = GetPlayerPed(src)
+    if not ped then return false end
+    
+    local playerCoords = GetEntityCoords(ped)
+    if not playerCoords then return false end
+    
+    local npcs = Config.AuctioneerNPCs
+    if not npcs then return false end
+    
+    local maxDistance = Config.InteractionDistance or 2.5
+    
+    for _, npcConfig in ipairs(npcs) do
+        local npcCoords = npcConfig.coords
+        local distance = #(playerCoords - npcCoords)
+        if distance <= maxDistance then
+            return true
+        end
     end
+    
+    return false
 end
 
 -- ============================================
@@ -757,52 +799,59 @@ function endAuction(auctionId)
         -- Transfer funds to seller (from escrow)
         local sellerCitizenid = auction.owner.citizenid
         
-        -- Find winner and seller server IDs
-        local winnerServerId, sellerServerId
-        for _, p in ipairs(GetPlayers()) do
-            local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
-            if pPlayer then
-                if pPlayer.PlayerData.citizenid == winnerCitizenid then
-                    winnerServerId = tonumber(p)
-                end
-                if pPlayer.PlayerData.citizenid == sellerCitizenid then
-                    sellerServerId = tonumber(p)
-                end
-            end
-        end
-        
-        -- Give item to winner (online or queue for offline)
+        -- Queue item for winner to collect at auctioneer
         local itemData = Escrow.items[auctionId]
         if itemData then
-            if winnerServerId then
-                -- Winner online - give item now
-                addPlayerItem(winnerServerId, itemData.itemName, itemData.count, itemData.metadata)
-                TriggerClientEvent('auction:client:notification', winnerServerId, {
-                    type = 'won',
-                    auctionId = auctionId,
-                    itemName = auction.item.label,
-                    count = auction.item.count,
-                    amount = winAmount
-                })
-            else
-                -- Winner offline - queue item for later
-                queueItemPayout(winnerCitizenid, itemData.itemName, itemData.count, itemData.metadata, auctionId)
+            queueItemCollection(
+                winnerCitizenid,
+                itemData.itemName,
+                auction.item.label,
+                itemData.count,
+                itemData.metadata,
+                auctionId,
+                auction.item.image,
+                winAmount,
+                auction.owner.name
+            )
+            
+            -- Notify winner they have items to collect
+            for _, p in ipairs(GetPlayers()) do
+                local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+                if pPlayer and pPlayer.PlayerData.citizenid == winnerCitizenid then
+                    TriggerClientEvent('auction:client:notification', tonumber(p), {
+                        type = 'won',
+                        auctionId = auctionId,
+                        itemName = auction.item.label,
+                        count = auction.item.count,
+                        amount = winAmount
+                    })
+                    break
+                end
             end
             
-            -- Give money to seller (online or queue for offline)
-            if sellerServerId then
-                -- Seller online - give money now
-                addPlayerMoney(sellerServerId, winAmount)
-                TriggerClientEvent('auction:client:notification', sellerServerId, {
-                    type = 'sold',
-                    auctionId = auctionId,
-                    itemName = auction.item.label,
-                    count = auction.item.count,
-                    amount = winAmount
-                })
-            else
-                -- Seller offline - queue money for later
-                queueMoneyPayout(sellerCitizenid, winAmount, 'auction sale: ' .. auctionId)
+            -- Queue money for seller to collect at auctioneer
+            queueMoneyCollection(
+                sellerCitizenid,
+                winAmount,
+                'auction sale: ' .. auctionId,
+                auctionId,
+                auction.item.label,
+                auction.owner.name
+            )
+            
+            -- Notify seller they have money to collect
+            for _, p in ipairs(GetPlayers()) do
+                local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+                if pPlayer and pPlayer.PlayerData.citizenid == sellerCitizenid then
+                    TriggerClientEvent('auction:client:notification', tonumber(p), {
+                        type = 'sold',
+                        auctionId = auctionId,
+                        itemName = auction.item.label,
+                        count = auction.item.count,
+                        amount = winAmount
+                    })
+                    break
+                end
             end
             
             Escrow.items[auctionId] = nil
@@ -823,7 +872,7 @@ function endAuction(auctionId)
             totalBids = auction.totalBids
         })
     else
-        -- No bids - return item to owner
+        -- No bids - return item to owner via collection
         local itemData = Escrow.items[auctionId]
         local ownerCitizenid = auction.owner.citizenid
         
@@ -837,27 +886,31 @@ function endAuction(auctionId)
             sellerName = auction.owner.name
         })
         
-        local ownerServerId
+        -- Queue item for owner to collect at auctioneer
+        queueItemCollection(
+            ownerCitizenid,
+            itemData.itemName,
+            auction.item.label,
+            itemData.count,
+            itemData.metadata,
+            auctionId,
+            auction.item.image,
+            0,  -- soldFor = 0 for expired auctions
+            auction.owner.name
+        )
+        
+        -- Notify owner their item is ready for collection
         for _, p in ipairs(GetPlayers()) do
             local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
             if pPlayer and pPlayer.PlayerData.citizenid == ownerCitizenid then
-                ownerServerId = tonumber(p)
+                TriggerClientEvent('auction:client:notification', tonumber(p), {
+                    type = 'expired',
+                    auctionId = auctionId,
+                    itemName = auction.item.label,
+                    count = auction.item.count
+                })
                 break
             end
-        end
-        
-        if ownerServerId then
-            -- Owner online - return item now
-            addPlayerItem(ownerServerId, itemData.itemName, itemData.count, itemData.metadata)
-            TriggerClientEvent('auction:client:notification', ownerServerId, {
-                type = 'expired',
-                auctionId = auctionId,
-                itemName = auction.item.label,
-                count = auction.item.count
-            })
-        else
-            -- Owner offline - queue item return for later
-            queueItemPayout(ownerCitizenid, itemData.itemName, itemData.count, itemData.metadata, auctionId)
         end
         
         Escrow.items[auctionId] = nil
@@ -1077,6 +1130,12 @@ RegisterNetEvent('auction:server:getPlayerAuctions', function()
     TriggerClientEvent('auction:client:receivePlayerAuctions', src, { auctions = playerAuctions })
 end)
 
+-- Get current player balance
+RegisterNetEvent('auction:server:getBalance', function()
+    local src = source
+    emitBalanceUpdate(src)
+end)
+
 -- Calculate fee preview for UI
 RegisterNetEvent('auction:server:calculateFeePreview', function(data)
     local src = source
@@ -1137,6 +1196,194 @@ RegisterNetEvent('auction:server:getCategories', function()
 end)
 
 -- ============================================
+-- COLLECTION SYSTEM EVENTS
+-- ============================================
+
+-- Get pending collections for a player
+RegisterNetEvent('auction:server:getPendingCollections', function()
+    local src = source
+    local Player = getPlayer(src)
+    if not Player then return end
+    
+    local citizenid = Player.PlayerData.citizenid
+    local collections = getPendingCollections(citizenid)
+    
+    TriggerClientEvent('auction:client:receivePendingCollections', src, collections)
+end)
+
+-- Collect a specific item
+RegisterNetEvent('auction:server:collectItem', function(auctionId, itemName)
+    local src = source
+    local Player = getPlayer(src)
+    if not Player then 
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Player not found',
+            type = 'item'
+        })
+        return 
+    end
+    
+    local citizenid = Player.PlayerData.citizenid
+    
+    -- Verify player is near auctioneer
+    if not isPlayerNearAuctioneer(src) then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'You must be near an auctioneer to collect items',
+            type = 'item'
+        })
+        return
+    end
+    
+    -- Get pending collections
+    local collections = PendingCollections[citizenid]
+    if not collections or not collections.items then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'No pending items to collect',
+            type = 'item'
+        })
+        return
+    end
+    
+    -- Find the specific item
+    local itemIndex = nil
+    local itemData = nil
+    for i, item in ipairs(collections.items) do
+        if item.auctionId == auctionId and item.itemName == itemName and not item.collectedAt then
+            itemIndex = i
+            itemData = item
+            break
+        end
+    end
+    
+    if not itemData then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Item not found or already collected',
+            type = 'item'
+        })
+        return
+    end
+
+    -- Add item to player inventory (verifies success internally)
+    if not addPlayerItem(src, itemData.itemName, itemData.count, itemData.metadata) then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Insufficient inventory space',
+            type = 'item'
+        })
+        return
+    end
+    
+    -- Mark as collected
+    collections.items[itemIndex].collectedAt = os.time()
+    
+    -- Clean up empty collections
+    local hasRemaining = collections.money and not collections.money.collectedAt
+    if not hasRemaining then
+        local hasItems = false
+        for _, item in ipairs(collections.items) do
+            if not item.collectedAt then
+                hasItems = true
+                break
+            end
+        end
+        if not hasItems then
+            PendingCollections[citizenid] = nil
+        end
+    end
+    
+    saveAuctions()
+    
+    print(('[Auction] Item %s x%d collected by %s'):format(itemData.itemName, itemData.count, citizenid))
+    
+    TriggerClientEvent('auction:client:collectionResult', src, {
+        success = true,
+        type = 'item',
+        itemName = itemData.itemName,
+        itemLabel = itemData.itemLabel,
+        count = itemData.count
+    })
+end)
+
+-- Collect money
+RegisterNetEvent('auction:server:collectMoney', function()
+    local src = source
+    local Player = getPlayer(src)
+    if not Player then 
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Player not found',
+            type = 'money'
+        })
+        return 
+    end
+    
+    local citizenid = Player.PlayerData.citizenid
+    
+    -- Verify player is near auctioneer
+    if not isPlayerNearAuctioneer(src) then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'You must be near an auctioneer to collect money',
+            type = 'money'
+        })
+        return
+    end
+    
+    -- Get pending collections
+    local collections = PendingCollections[citizenid]
+    if not collections or not collections.money or collections.money.collectedAt then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'No pending money to collect',
+            type = 'money'
+        })
+        return
+    end
+    
+    local moneyData = collections.money
+    local amount = moneyData.amount
+    
+    -- Add money to player
+    if not addPlayerMoney(src, amount) then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Failed to add money',
+            type = 'money'
+        })
+        return
+    end
+    
+    -- Mark as collected
+    collections.money.collectedAt = os.time()
+    
+    -- Clean up empty collections
+    local hasItems = false
+    for _, item in ipairs(collections.items) do
+        if not item.collectedAt then
+            hasItems = true
+            break
+        end
+    end
+    if not hasItems then
+        PendingCollections[citizenid] = nil
+    end
+    
+    saveAuctions()
+    
+    print(('[Auction] Money $%d collected by %s'):format(amount, citizenid))
+    
+    TriggerClientEvent('auction:client:collectionResult', src, {
+        success = true,
+        type = 'money',
+        amount = amount
+    })
+end)
+
+-- ============================================
 -- NPC INTERACTION VALIDATION
 -- ============================================
 
@@ -1184,26 +1431,46 @@ AddEventHandler('onResourceStop', function(resourceName)
 end)
 
 -- ============================================
--- PLAYER LOADED - DELIVER PENDING PAYOUTS
+-- PLAYER LOADED - NOTIFY PENDING COLLECTIONS
 -- ============================================
 
 -- RSGCore player loaded event
 AddEventHandler('RSGCore:Server:PlayerLoaded', function(Player)
     if not Player then return end
     local src = Player.PlayerData.source
-    -- Delay slightly to ensure player is fully loaded
+    local citizenid = Player.PlayerData.citizenid
+    
+    -- Check for pending collections and notify
     SetTimeout(1000, function()
-        deliverPendingPayouts(src)
-    end)
-end)
-
--- Also check on resource restart for already-online players
-AddEventHandler('onResourceStart', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-    -- Check all online players for pending payouts
-    SetTimeout(2000, function()
-        for _, p in ipairs(GetPlayers()) do
-            deliverPendingPayouts(tonumber(p))
+        local collections = PendingCollections[citizenid]
+        if collections then
+            local itemCount = 0
+            local hasMoney = collections.money and not collections.money.collectedAt
+            
+            for _, item in ipairs(collections.items or {}) do
+                if not item.collectedAt then
+                    itemCount = itemCount + 1
+                end
+            end
+            
+            if itemCount > 0 or hasMoney then
+                local message = 'You have '
+                if itemCount > 0 then
+                    message = message .. itemCount .. ' item(s)'
+                end
+                if hasMoney then
+                    if itemCount > 0 then
+                        message = message .. ' and '
+                    end
+                    message = message .. '$' .. collections.money.amount .. ' in sales'
+                end
+                message = message .. ' to collect at the auctioneer!'
+                
+                TriggerClientEvent('auction:client:notification', src, {
+                    type = 'info',
+                    message = message
+                })
+            end
         end
     end)
 end)
