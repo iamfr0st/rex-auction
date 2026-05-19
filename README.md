@@ -2,6 +2,8 @@
 
 A real-time auction house system for RedM servers running RSG Framework. Players can list items for auction, place bids, and receive items/money through an in-game UI accessed via NPC auctioneers.
 
+[Buy me a Beer](https://buymeacoffee.com/rexshack)
+
 ## Features
 
 - **Real-time Auctions**: Live bidding with instant updates across all connected players
