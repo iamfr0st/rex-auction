@@ -4,7 +4,7 @@ game 'rdr3'
 
 author 'RexShack'
 description 'Real-time auction system for RSG Framework'
-version '2.0.8'
+version '2.0.9'
 
 rdr3_warning 'I understand that RedM is not officially supported and this resource may break at any time'
 

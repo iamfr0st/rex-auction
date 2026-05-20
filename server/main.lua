@@ -145,6 +145,7 @@ local function removePlayerItem(src, itemName, count)
     if not item or item.amount < count then return false end
     
     Player.Functions.RemoveItem(itemName, count)
+    TriggerClientEvent('rsg-inventory:client:ItemBox', src, RSGCore.Shared.Items[itemName], 'remove', count)
     return true
 end
 
@@ -157,6 +158,7 @@ local function addPlayerItem(src, itemName, count, metadata)
     local countBefore = currentSlot and currentSlot.amount or 0
 
     Player.Functions.AddItem(itemName, count, false, metadata)
+    TriggerClientEvent('rsg-inventory:client:ItemBox', src, RSGCore.Shared.Items[itemName], 'add', count)
 
     -- Verify item was added (RSGCore doesn't return success, so we check after)
     local slotAfter = Player.Functions.GetItemByName(itemName)
