@@ -92,6 +92,38 @@ local function loadAuctions()
                 if auction.item and not auction.item.imageMeta then
                     auction.item.imageMeta = buildImageMetadata(auction.item.name)
                 end
+                -- Backfill cents values for existing auctions (convert old dollar values)
+                if auction.startingBid and not auction.startingBidCents then
+                    auction.startingBidCents = Money.dollarsToCents(auction.startingBid)
+                end
+                if auction.currentBid and not auction.currentBidCents then
+                    auction.currentBidCents = Money.dollarsToCents(auction.currentBid)
+                end
+                if auction.soldFor and not auction.soldForCents then
+                    auction.soldForCents = Money.dollarsToCents(auction.soldFor)
+                end
+                if auction.creationFee and not auction.creationFeeCents then
+                    auction.creationFeeCents = Money.dollarsToCents(auction.creationFee)
+                end
+            end
+            
+            -- Backfill cents values in bid history
+            for auctionId, history in pairs(BidHistory) do
+                for _, bid in ipairs(history) do
+                    if bid.amount and not bid.amountCents then
+                        bid.amountCents = Money.dollarsToCents(bid.amount)
+                    end
+                end
+            end
+            
+            -- Backfill cents values in escrow funds
+            for auctionId, funds in pairs(Escrow.funds) do
+                for citizenid, amount in pairs(funds) do
+                    if type(amount) == "number" and amount < 10000 then
+                        -- Likely old dollar value, convert to cents
+                        Escrow.funds[auctionId][citizenid] = Money.dollarsToCents(amount)
+                    end
+                end
             end
             
             -- Restart timers for active auctions
@@ -172,41 +204,55 @@ local function getPlayerMoney(src)
     if not Player then return 0, 0 end
     
     local money = Player.PlayerData.money
-    return money['cash'] or 0, money['bank'] or 0
+    -- Return money as cents (multiply by 100)
+    local cash = money['cash'] or 0
+    local bank = money['bank'] or 0
+    return Money.dollarsToCents(cash), Money.dollarsToCents(bank)
 end
 
 -- Emit balance update to client for NUI sync
 local function emitBalanceUpdate(src)
-    local cash, bank = getPlayerMoney(src)
+    local cashCents, bankCents = getPlayerMoney(src)
     TriggerClientEvent('auction:client:balanceUpdated', src, {
-        cash = cash,
-        bank = bank
+        cash = cashCents,
+        bank = bankCents
     })
 end
 
-local function removePlayerMoney(src, amount, silent)
+local function removePlayerMoney(src, amountCents, silent)
     local Player = getPlayer(src)
     if not Player then return false end
     
-    local cash, bank = getPlayerMoney(src)
-    if cash >= amount then
-        Player.Functions.RemoveMoney('cash', amount)
+    -- Convert cents to dollars for framework call
+    local amountDollars = Money.centsToDollars(amountCents)
+    
+    local cashCents, bankCents = getPlayerMoney(src)
+    local cashDollars = Money.centsToDollars(cashCents)
+    local bankDollars = Money.centsToDollars(bankCents)
+    
+    if cashCents >= amountCents then
+        Player.Functions.RemoveMoney('cash', amountDollars)
         if not silent then emitBalanceUpdate(src) end
         return true
-    elseif cash + bank >= amount then
-        Player.Functions.RemoveMoney('cash', cash)
-        Player.Functions.RemoveMoney('bank', amount - cash)
+    elseif cashCents + bankCents >= amountCents then
+        -- Use all cash first, then bank
+        Player.Functions.RemoveMoney('cash', cashDollars)
+        local remainingCents = amountCents - cashCents
+        Player.Functions.RemoveMoney('bank', Money.centsToDollars(remainingCents))
         if not silent then emitBalanceUpdate(src) end
         return true
     end
     return false
 end
 
-local function addPlayerMoney(src, amount, silent)
+local function addPlayerMoney(src, amountCents, silent)
     local Player = getPlayer(src)
     if not Player then return false end
     
-    Player.Functions.AddMoney('bank', amount)
+    -- Convert cents to dollars for framework call
+    local amountDollars = Money.centsToDollars(amountCents)
+    
+    Player.Functions.AddMoney('bank', amountDollars)
     if not silent then emitBalanceUpdate(src) end
     return true
 end
@@ -290,6 +336,7 @@ end
 
 -- Calculate creation fee based on duration and quantity
 -- Formula: BaseFee + (DurationMultiplier * hours) + (QuantityMultiplier * quantity)
+-- Returns fee in CENTS
 local function calculateCreationFee(durationSeconds, quantity)
     local feeConfig = Config.CreationFee
     
@@ -298,66 +345,66 @@ local function calculateCreationFee(durationSeconds, quantity)
         return 0
     end
     
-    local baseFee = feeConfig.baseFee or 5
-    local durationMultiplier = feeConfig.durationMultiplier or 2
-    local quantityMultiplier = feeConfig.quantityMultiplier or 0.5
-    local maxFee = feeConfig.maxFee or 500
-    local minFee = feeConfig.minFee or 5
+    local baseFeeCents = Money.dollarsToCents(feeConfig.baseFee or 5)
+    local durationMultiplierCents = Money.dollarsToCents(feeConfig.durationMultiplier or 2)
+    local quantityMultiplierCents = Money.dollarsToCents(feeConfig.quantityMultiplier or 0.5)
+    local maxFeeCents = Money.dollarsToCents(feeConfig.maxFee or 500)
+    local minFeeCents = Money.dollarsToCents(feeConfig.minFee or 5)
     
     -- Convert duration to hours
     local durationHours = durationSeconds / 3600
     
-    -- Calculate fee components
-    local durationFee = durationMultiplier * durationHours
-    local quantityFee = quantityMultiplier * quantity
+    -- Calculate fee components (in cents)
+    local durationFeeCents = math.floor(durationMultiplierCents * durationHours)
+    local quantityFeeCents = quantityMultiplierCents * quantity
     
-    -- Total fee
-    local totalFee = baseFee + durationFee + quantityFee
+    -- Total fee in cents
+    local totalFeeCents = baseFeeCents + durationFeeCents + quantityFeeCents
     
     -- Apply min/max caps
-    totalFee = math.max(minFee, math.min(maxFee, totalFee))
+    totalFeeCents = math.max(minFeeCents, math.min(maxFeeCents, totalFeeCents))
     
-    -- Round to whole number
-    return math.floor(totalFee)
+    return totalFeeCents
 end
 
 -- Get fee breakdown for UI preview
+-- All values returned in CENTS
 local function getFeeBreakdown(durationSeconds, quantity)
     local feeConfig = Config.CreationFee
     
     if not feeConfig or not feeConfig.enabled then
         return {
             enabled = false,
-            total = 0,
-            baseFee = 0,
-            durationFee = 0,
-            quantityFee = 0
+            totalCents = 0,
+            baseFeeCents = 0,
+            durationFeeCents = 0,
+            quantityFeeCents = 0
         }
     end
     
-    local baseFee = feeConfig.baseFee or 5
-    local durationMultiplier = feeConfig.durationMultiplier or 2
-    local quantityMultiplier = feeConfig.quantityMultiplier or 0.5
-    local maxFee = feeConfig.maxFee or 500
-    local minFee = feeConfig.minFee or 5
+    local baseFeeCents = Money.dollarsToCents(feeConfig.baseFee or 5)
+    local durationMultiplierCents = Money.dollarsToCents(feeConfig.durationMultiplier or 2)
+    local quantityMultiplierCents = Money.dollarsToCents(feeConfig.quantityMultiplier or 0.5)
+    local maxFeeCents = Money.dollarsToCents(feeConfig.maxFee or 500)
+    local minFeeCents = Money.dollarsToCents(feeConfig.minFee or 5)
     
     local durationHours = durationSeconds / 3600
-    local durationFee = durationMultiplier * durationHours
-    local quantityFee = quantityMultiplier * quantity
-    local totalFee = baseFee + durationFee + quantityFee
+    local durationFeeCents = math.floor(durationMultiplierCents * durationHours)
+    local quantityFeeCents = quantityMultiplierCents * quantity
+    local totalFeeCents = baseFeeCents + durationFeeCents + quantityFeeCents
     
     -- Apply caps for display
-    local cappedFee = math.max(minFee, math.min(maxFee, totalFee))
-    local wasCapped = totalFee > maxFee
+    local cappedFeeCents = math.max(minFeeCents, math.min(maxFeeCents, totalFeeCents))
+    local wasCapped = totalFeeCents > maxFeeCents
     
     return {
         enabled = true,
-        baseFee = baseFee,
-        durationFee = math.floor(durationFee * 100) / 100,
-        quantityFee = math.floor(quantityFee * 100) / 100,
-        total = math.floor(cappedFee),
-        maxFee = maxFee,
-        minFee = minFee,
+        baseFeeCents = baseFeeCents,
+        durationFeeCents = durationFeeCents,
+        quantityFeeCents = quantityFeeCents,
+        totalCents = cappedFeeCents,
+        maxFeeCents = maxFeeCents,
+        minFeeCents = minFeeCents,
         wasCapped = wasCapped
     }
 end
@@ -367,23 +414,25 @@ end
 -- ============================================
 
 -- Queue money for collection at auctioneer (for sellers)
-local function queueMoneyCollection(citizenid, amount, reason, auctionId, itemName, sellerName)
+-- amountCents: amount in CENTS
+local function queueMoneyCollection(citizenid, amountCents, reason, auctionId, itemName, sellerName)
     if not PendingCollections[citizenid] then
         PendingCollections[citizenid] = { money = nil, items = {} }
     end
     PendingCollections[citizenid].money = {
-        amount = amount,
+        amountCents = amountCents,
         reason = reason or 'auction sale',
         auctionId = auctionId,
         itemName = itemName,
         collectedAt = nil
     }
-    print(('[Auction] Queued $%d money collection for %s (%s)'):format(amount, citizenid, reason or 'unknown'))
+    print(('[Auction] Queued %s money collection for %s (%s)'):format(Money.format(amountCents), citizenid, reason or 'unknown'))
     saveAuctions()
 end
 
 -- Queue item for collection at auctioneer (for winners)
-local function queueItemCollection(citizenid, itemName, itemLabel, count, metadata, auctionId, image, soldFor, sellerName)
+-- soldForCents: sale price in CENTS
+local function queueItemCollection(citizenid, itemName, itemLabel, count, metadata, auctionId, image, soldForCents, sellerName)
     if not PendingCollections[citizenid] then
         PendingCollections[citizenid] = { money = nil, items = {} }
     end
@@ -395,7 +444,7 @@ local function queueItemCollection(citizenid, itemName, itemLabel, count, metada
         auctionId = auctionId,
         image = image,
         imageMeta = buildImageMetadata(itemName),
-        soldFor = soldFor,
+        soldForCents = soldForCents,
         sellerName = sellerName,
         collectedAt = nil
     })
@@ -404,6 +453,7 @@ local function queueItemCollection(citizenid, itemName, itemLabel, count, metada
 end
 
 -- Get pending collections for a player
+-- Returns amounts in CENTS
 local function getPendingCollections(citizenid)
     local collections = PendingCollections[citizenid]
     if not collections then
@@ -414,11 +464,20 @@ local function getPendingCollections(citizenid)
     local pendingItems = {}
     for _, item in ipairs(collections.items) do
         if not item.collectedAt then
+            -- Ensure soldForCents exists (backwards compat with old soldFor)
+            if not item.soldForCents and item.soldFor then
+                item.soldForCents = Money.dollarsToCents(item.soldFor)
+            end
             table.insert(pendingItems, item)
         end
     end
     
     local pendingMoney = collections.money and not collections.money.collectedAt and collections.money or nil
+    
+    -- Ensure amountCents exists (backwards compat with old amount)
+    if pendingMoney and not pendingMoney.amountCents and pendingMoney.amount then
+        pendingMoney.amountCents = Money.dollarsToCents(pendingMoney.amount)
+    end
     
     return {
         money = pendingMoney,
@@ -493,52 +552,59 @@ local function createAuction(src, itemData)
     end
     
     -- Validate auction parameters
-    if itemData.startingBid < 1 then
-        return { success = false, error = 'Starting bid must be at least $1' }
+    -- Convert startingBid to cents (client sends in cents)
+    local startingBidCents = itemData.startingBid
+    if type(startingBidCents) ~= "number" then
+        startingBidCents = Money.parseToCents(tostring(itemData.startingBid))
+    end
+    
+    -- Minimum starting bid is 1 cent
+    if not startingBidCents or startingBidCents < 1 then
+        return { success = false, error = 'Starting bid must be at least $0.01' }
     end
     
     local minDuration = 60       -- 1 minute minimum for testing
     local maxDuration = 604800   -- 7 days maximum
     local duration = math.min(math.max(itemData.duration or 3600, minDuration), maxDuration)
     
-    -- Calculate and validate creation fee
-    local creationFee = calculateCreationFee(duration, itemData.count or 1)
+    -- Calculate and validate creation fee (returns cents)
+    local creationFeeCents = calculateCreationFee(duration, itemData.count or 1)
     
-    if Config.CreationFee and Config.CreationFee.enabled and creationFee > 0 then
+    if Config.CreationFee and Config.CreationFee.enabled and creationFeeCents > 0 then
         -- Check if player has enough money for fee
-        local cash, bank = getPlayerMoney(src)
-        local totalAvailable = cash + bank
+        local cashCents, bankCents = getPlayerMoney(src)
+        local totalAvailableCents = cashCents + bankCents
         
-        if totalAvailable < creationFee then
-            print(('[Auction] Insufficient funds for fee: %s (%s) needs $%d, has $%d'):format(
-                playerInfo.name, playerInfo.citizenid, creationFee, totalAvailable
+        if totalAvailableCents < creationFeeCents then
+            print(('[Auction] Insufficient funds for fee: %s (%s) needs %s, has %s'):format(
+                playerInfo.name, playerInfo.citizenid, Money.format(creationFeeCents), Money.format(totalAvailableCents)
             ))
             return { 
                 success = false, 
-                error = ('Insufficient funds for creation fee: $%d required'):format(creationFee),
-                fee = creationFee,
-                playerFunds = totalAvailable
+                error = ('Insufficient funds for creation fee: %s required'):format(Money.format(creationFeeCents)),
+                feeCents = creationFeeCents,
+                playerFundsCents = totalAvailableCents
             }
         end
         
         -- Deduct fee
-        if not removePlayerMoney(src, creationFee) then
+        if not removePlayerMoney(src, creationFeeCents) then
             print(('[Auction] Failed to deduct fee from %s (%s)'):format(
                 playerInfo.name, playerInfo.citizenid
             ))
             return { success = false, error = 'Failed to process creation fee' }
         end
         
-        print(('[Auction] Deducted $%d creation fee from %s (%s)'):format(
-            creationFee, playerInfo.name, playerInfo.citizenid
+        print(('[Auction] Deducted %s creation fee from %s (%s)'):format(
+            Money.format(creationFeeCents), playerInfo.name, playerInfo.citizenid
         ))
     end
     
     -- Remove item from inventory (escrow)
     if not removePlayerItem(src, itemData.itemName, itemData.count) then
         -- Refund fee if item removal fails
-        if creationFee > 0 then
-            addPlayerMoney(src, creationFee)
+        if creationFeeCents > 0 then
+            addPlayerMoney(src, creationFeeCents)
         end
         return { success = false, error = 'Failed to remove item from inventory' }
     end
@@ -565,14 +631,14 @@ local function createAuction(src, itemData)
             imageMeta = buildImageMetadata(itemData.itemName)
         },
         category = selectedCategory,
-        startingBid = itemData.startingBid,
-        currentBid = 0,
+        startingBidCents = startingBidCents,
+        currentBidCents = 0,
         highestBidder = nil,
         endTime = now + duration,
         createdAt = now,
         status = 'active',
         totalBids = 0,
-        creationFee = creationFee
+        creationFeeCents = creationFeeCents
     }
     
     Auctions[auctionId] = auction
@@ -598,19 +664,19 @@ local function createAuction(src, itemData)
         itemName = auction.item.name,
         itemLabel = auction.item.label,
         count = auction.item.count,
-        startingBid = auction.startingBid,
+        startingBidCents = startingBidCents,
         sellerName = playerInfo.name,
         duration = duration,
-        creationFee = creationFee
+        creationFeeCents = creationFeeCents
     })
     
     -- Broadcast new auction to all players
     broadcastToAll('auctionCreated', auction)
     
-    return { success = true, auction = auction, creationFee = creationFee }
+    return { success = true, auction = auction, creationFeeCents = creationFeeCents }
 end
 
-local function placeBid(src, auctionId, bidAmount)
+local function placeBid(src, auctionId, bidAmountCents)
     local playerInfo = getPlayerInfo(src)
     if not playerInfo then
         return { success = false, error = 'Player not found' }
@@ -636,28 +702,33 @@ local function placeBid(src, auctionId, bidAmount)
         return { success = false, error = 'You cannot bid on your own auction' }
     end
     
-    -- Validate bid amount
-    local minBid = auction.currentBid > 0 and auction.currentBid * 1.05 or auction.startingBid
-    minBid = math.floor(minBid)
+    -- Validate bid amount (bidAmountCents should already be in cents from client)
+    if type(bidAmountCents) ~= "number" then
+        bidAmountCents = Money.parseToCents(tostring(bidAmountCents))
+    end
     
-    if bidAmount < minBid then
-        return { success = false, error = 'Minimum bid is $' .. minBid, minBid = minBid }
+    -- Calculate minimum bid in cents (5% increase over current bid)
+    local currentBidCents = auction.currentBidCents or 0
+    local minBidCents = currentBidCents > 0 and math.ceil(currentBidCents * 1.05) or auction.startingBidCents
+    
+    if bidAmountCents < minBidCents then
+        return { success = false, error = 'Minimum bid is ' .. Money.format(minBidCents), minBidCents = minBidCents }
     end
     
     -- Check if player has enough money
-    local cash, bank = getPlayerMoney(src)
-    local totalAvailable = cash + bank
+    local cashCents, bankCents = getPlayerMoney(src)
+    local totalAvailableCents = cashCents + bankCents
     
     -- Check how much is already in escrow for this auction
-    local previousBid = 0
+    local previousBidCents = 0
     if Escrow.funds[auctionId] and Escrow.funds[auctionId][playerInfo.citizenid] then
-        previousBid = Escrow.funds[auctionId][playerInfo.citizenid]
+        previousBidCents = Escrow.funds[auctionId][playerInfo.citizenid]
     end
     
-    local additionalFundsNeeded = bidAmount - previousBid
+    local additionalFundsNeededCents = bidAmountCents - previousBidCents
     
-    if totalAvailable < additionalFundsNeeded then
-        return { success = false, error = 'Insufficient funds', minBid = minBid }
+    if totalAvailableCents < additionalFundsNeededCents then
+        return { success = false, error = 'Insufficient funds', minBidCents = minBidCents }
     end
     
     -- Handle previous highest bidder refund
@@ -668,19 +739,19 @@ local function placeBid(src, auctionId, bidAmount)
         
         -- Return funds to previous bidder (remove from escrow)
         if Escrow.funds[auctionId] and Escrow.funds[auctionId][prevBidderCitizenid] then
-            local refundAmount = Escrow.funds[auctionId][prevBidderCitizenid]
+            local refundAmountCents = Escrow.funds[auctionId][prevBidderCitizenid]
             Escrow.funds[auctionId][prevBidderCitizenid] = nil
             
             -- Find the previous bidder's server ID
             for _, p in ipairs(GetPlayers()) do
                 local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
                 if pPlayer and pPlayer.PlayerData.citizenid == prevBidderCitizenid then
-                    addPlayerMoney(tonumber(p), refundAmount)
+                    addPlayerMoney(tonumber(p), refundAmountCents)
                     TriggerClientEvent('auction:client:notification', tonumber(p), {
                         type = 'outbid',
                         auctionId = auctionId,
                         itemName = auction.item.label,
-                        newHighBid = bidAmount
+                        newHighBidCents = bidAmountCents
                     })
                     break
                 end
@@ -689,21 +760,21 @@ local function placeBid(src, auctionId, bidAmount)
     end
     
     -- Remove additional funds from player
-    if additionalFundsNeeded > 0 then
-        if not removePlayerMoney(src, additionalFundsNeeded) then
+    if additionalFundsNeededCents > 0 then
+        if not removePlayerMoney(src, additionalFundsNeededCents) then
             return { success = false, error = 'Failed to process payment' }
         end
     end
     
-    -- Add to escrow
+    -- Add to escrow (store in cents)
     if not Escrow.funds[auctionId] then
         Escrow.funds[auctionId] = {}
     end
-    Escrow.funds[auctionId][playerInfo.citizenid] = bidAmount
+    Escrow.funds[auctionId][playerInfo.citizenid] = bidAmountCents
     
     -- Update auction
     local previousHighest = auction.highestBidder
-    auction.currentBid = bidAmount
+    auction.currentBidCents = bidAmountCents
     auction.highestBidder = {
         id = src,
         name = playerInfo.name,
@@ -716,7 +787,7 @@ local function placeBid(src, auctionId, bidAmount)
         playerId = src,
         playerName = playerInfo.name,
         citizenid = playerInfo.citizenid,
-        amount = bidAmount,
+        amountCents = bidAmountCents,
         timestamp = os.time()
     })
     
@@ -726,8 +797,8 @@ local function placeBid(src, auctionId, bidAmount)
     SendWebhook('bidPlaced', {
         auctionId = auctionId,
         itemLabel = auction.item.label,
-        bidAmount = bidAmount,
-        previousBid = previousBid,
+        bidAmountCents = bidAmountCents,
+        previousBidCents = previousBidCents,
         bidderName = playerInfo.name,
         totalBids = auction.totalBids
     })
@@ -735,7 +806,7 @@ local function placeBid(src, auctionId, bidAmount)
     -- Broadcast bid update
     broadcastToAll('bidPlaced', {
         auctionId = auctionId,
-        currentBid = bidAmount,
+        currentBidCents = bidAmountCents,
         highestBidder = {
             name = playerInfo.name,
             citizenid = playerInfo.citizenid
@@ -763,7 +834,7 @@ function endAuction(auctionId)
     if auction.highestBidder then
         -- Winner found
         local winnerCitizenid = auction.highestBidder.citizenid
-        local winAmount = auction.currentBid
+        local winAmountCents = auction.currentBidCents
         
         -- Transfer funds to seller (from escrow)
         local sellerCitizenid = auction.owner.citizenid
@@ -779,7 +850,7 @@ function endAuction(auctionId)
                 itemData.metadata,
                 auctionId,
                 auction.item.image,
-                winAmount,
+                winAmountCents,
                 auction.owner.name
             )
             
@@ -792,7 +863,7 @@ function endAuction(auctionId)
                         auctionId = auctionId,
                         itemName = auction.item.label,
                         count = auction.item.count,
-                        amount = winAmount
+                        amountCents = winAmountCents
                     })
                     break
                 end
@@ -801,7 +872,7 @@ function endAuction(auctionId)
             -- Queue money for seller to collect at auctioneer
             queueMoneyCollection(
                 sellerCitizenid,
-                winAmount,
+                winAmountCents,
                 'auction sale: ' .. auctionId,
                 auctionId,
                 auction.item.label,
@@ -817,7 +888,7 @@ function endAuction(auctionId)
                         auctionId = auctionId,
                         itemName = auction.item.label,
                         count = auction.item.count,
-                        amount = winAmount
+                        amountCents = winAmountCents
                     })
                     break
                 end
@@ -827,7 +898,7 @@ function endAuction(auctionId)
         end
         
         auction.winner = auction.highestBidder
-        auction.soldFor = winAmount
+        auction.soldForCents = winAmountCents
         
         -- Send webhook notification for won auction
         SendWebhook('auctionWon', {
@@ -835,7 +906,7 @@ function endAuction(auctionId)
             itemName = auction.item.name,
             itemLabel = auction.item.label,
             count = auction.item.count,
-            finalPrice = winAmount,
+            finalPriceCents = winAmountCents,
             winnerName = auction.highestBidder.name,
             sellerName = auction.owner.name,
             totalBids = auction.totalBids
@@ -851,7 +922,7 @@ function endAuction(auctionId)
             itemName = auction.item.name,
             itemLabel = auction.item.label,
             count = auction.item.count,
-            startingBid = auction.startingBid,
+            startingBidCents = auction.startingBidCents,
             sellerName = auction.owner.name
         })
         
@@ -864,7 +935,7 @@ function endAuction(auctionId)
             itemData.metadata,
             auctionId,
             auction.item.image,
-            0,  -- soldFor = 0 for expired auctions
+            0,  -- soldForCents = 0 for expired auctions
             auction.owner.name
         )
         
@@ -894,7 +965,7 @@ function endAuction(auctionId)
     broadcastToAll('auctionEnded', {
         auctionId = auctionId,
         winner = auction.winner,
-        soldFor = auction.soldFor,
+        soldForCents = auction.soldForCents,
         status = auction.status
     })
 end
@@ -946,7 +1017,7 @@ local function cancelAuction(src, auctionId)
         itemName = auction.item.name,
         itemLabel = auction.item.label,
         count = auction.item.count,
-        startingBid = auction.startingBid,
+        startingBidCents = auction.startingBidCents,
         sellerName = playerInfo.name,
         reason = 'Cancelled by seller'
     })
@@ -1118,18 +1189,18 @@ RegisterNetEvent('auction:server:calculateFeePreview', function(data)
     quantity = math.max(1, quantity)
     
     local breakdown = getFeeBreakdown(duration, quantity)
-    local playerFunds = 0
+    local playerFundsCents = 0
     
     local Player = getPlayer(src)
     if Player then
-        local money = Player.PlayerData.money
-        playerFunds = (money['cash'] or 0) + (money['bank'] or 0)
+        local cashCents, bankCents = getPlayerMoney(src)
+        playerFundsCents = cashCents + bankCents
     end
     
     TriggerClientEvent('auction:client:feePreview', src, {
         breakdown = breakdown,
-        playerFunds = playerFunds,
-        canAfford = playerFunds >= breakdown.total
+        playerFundsCents = playerFundsCents,
+        canAfford = playerFundsCents >= breakdown.totalCents
     })
 end)
 
@@ -1299,10 +1370,10 @@ RegisterNetEvent('auction:server:collectMoney', function()
     end
     
     local moneyData = collections.money
-    local amount = moneyData.amount
+    local amountCents = moneyData.amountCents or Money.dollarsToCents(moneyData.amount)
     
     -- Add money to player
-    if not addPlayerMoney(src, amount) then
+    if not addPlayerMoney(src, amountCents) then
         TriggerClientEvent('auction:client:collectionResult', src, {
             success = false,
             error = 'Failed to add money',
@@ -1328,12 +1399,12 @@ RegisterNetEvent('auction:server:collectMoney', function()
     
     saveAuctions()
     
-    print(('[Auction] Money $%d collected by %s'):format(amount, citizenid))
+    print(('[Auction] Money %s collected by %s'):format(Money.format(amountCents), citizenid))
     
     TriggerClientEvent('auction:client:collectionResult', src, {
         success = true,
         type = 'money',
-        amount = amount
+        amountCents = amountCents
     })
 end)
 
@@ -1416,7 +1487,8 @@ AddEventHandler('RSGCore:Server:PlayerLoaded', function(Player)
                     if itemCount > 0 then
                         message = message .. ' and '
                     end
-                    message = message .. '$' .. collections.money.amount .. ' in sales'
+                    local moneyAmountCents = collections.money.amountCents or Money.dollarsToCents(collections.money.amount)
+                    message = message .. Money.format(moneyAmountCents) .. ' in sales'
                 end
                 message = message .. ' to collect at the auctioneer!'
                 

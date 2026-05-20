@@ -4,7 +4,7 @@ game 'rdr3'
 
 author 'RexShack'
 description 'Real-time auction system for RSG Framework'
-version '2.0.9'
+version '2.0.10'
 
 rdr3_warning 'I understand that RedM is not officially supported and this resource may break at any time'
 
@@ -16,7 +16,8 @@ files {
 
 shared_scripts {
     '@ox_lib/init.lua',
-    'config.lua'
+    'config.lua',
+    'shared/money.lua'
 }
 
 client_scripts {

@@ -106,11 +106,12 @@ function NUI.Open(data)
     -- Refresh inventory before opening
     local inventory = refreshInventory()
     local PlayerData = RSGCore.Functions.GetPlayerData()
-    local cash, bank = 0, 0
+    local cashCents, bankCents = 0, 0
     
     if PlayerData.money then
-        cash = PlayerData.money['cash'] or 0
-        bank = PlayerData.money['bank'] or 0
+        -- Convert to cents for the UI
+        cashCents = Money.dollarsToCents(PlayerData.money['cash'] or 0)
+        bankCents = Money.dollarsToCents(PlayerData.money['bank'] or 0)
     end
     
     -- Get fee configuration
@@ -132,8 +133,8 @@ function NUI.Open(data)
     SetNuiFocus(true, true)
     NUI.SendMessage('open', {
         inventory = inventory,
-        cash = cash,
-        bank = bank,
+        cashCents = cashCents,
+        bankCents = bankCents,
         citizenid = PlayerData.citizenid,
         playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown',
         feeConfig = feeConfig,
@@ -194,7 +195,7 @@ RegisterNuiCallback('createAuction', function(data, cb)
         metadata = item.metadata,
         image = item.image,
         category = data.category,
-        startingBid = data.startingBid or 1,
+        startingBid = data.startingBid or 1,  -- Already in cents from UI
         duration = data.duration or 3600
     })
 
@@ -202,12 +203,12 @@ RegisterNuiCallback('createAuction', function(data, cb)
 end)
 
 RegisterNuiCallback('placeBid', function(data, cb)
-    if not data.auctionId or not data.amount then
+    if not data.auctionId or not data.amountCents then
         cb({ success = false, error = 'Invalid bid data' })
         return
     end
     
-    TriggerServerEvent('auction:server:placeBid', data.auctionId, data.amount)
+    TriggerServerEvent('auction:server:placeBid', data.auctionId, data.amountCents)
     cb({ success = true, message = 'Placing bid...' })
 end)
 
@@ -358,21 +359,24 @@ RegisterNetEvent('auction:client:notification', function(data)
     
     -- Also show in-game notification
     if data.type == 'outbid' then
+        local newHighBidCents = data.newHighBidCents or Money.dollarsToCents(data.newHighBid)
         lib.notify({
             title = 'Auction',
-            description = ('You were outbid on %s! New high bid: $%d'):format(data.itemName, data.newHighBid),
+            description = ('You were outbid on %s! New high bid: %s'):format(data.itemName, Money.format(newHighBidCents)),
             type = 'warning'
         })
     elseif data.type == 'won' then
+        local amountCents = data.amountCents or Money.dollarsToCents(data.amount)
         lib.notify({
             title = 'Auction Won!',
-            description = ('You won %s x%d for $%d! Visit the auctioneer to collect.'):format(data.itemName, data.count, data.amount),
+            description = ('You won %s x%d for %s! Visit the auctioneer to collect.'):format(data.itemName, data.count, Money.format(amountCents)),
             type = 'success'
         })
     elseif data.type == 'sold' then
+        local amountCents = data.amountCents or Money.dollarsToCents(data.amount)
         lib.notify({
             title = 'Auction Sold!',
-            description = ('Your %s x%d sold for $%d! Visit the auctioneer to collect your earnings.'):format(data.itemName, data.count, data.amount),
+            description = ('Your %s x%d sold for %s! Visit the auctioneer to collect your earnings.'):format(data.itemName, data.count, Money.format(amountCents)),
             type = 'success'
         })
     elseif data.type == 'expired' then

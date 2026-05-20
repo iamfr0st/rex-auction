@@ -77,7 +77,7 @@ Config = {
     },
     
     -- Auction Settings
-    MinStartingBid = 1,
+    MinStartingBid = 0.01,      -- Minimum starting bid in dollars (1 cent)
     MinDuration = 60,           -- Minimum auction duration in seconds (1 minute)
     MaxDuration = 604800,       -- Maximum auction duration in seconds (7 days)
     DefaultDuration = 3600,     -- Default duration (1 hour)
@@ -89,11 +89,11 @@ Config = {
     -- Fee formula: BaseFee + (DurationMultiplier * hours) + (QuantityMultiplier * quantity)
     CreationFee = {
         enabled = true,              -- Enable/disable creation fees
-        baseFee = 5,                 -- Base fee for any auction
-        durationMultiplier = 2,      -- Fee per hour of duration
-        quantityMultiplier = 0.50,   -- Fee per item quantity
+        baseFee = 0.50,              -- Base fee for any auction
+        durationMultiplier = 0.10,   -- Fee per hour of duration
+        quantityMultiplier = 0.10,   -- Fee per item quantity
         maxFee = 500,                -- Maximum fee cap
-        minFee = 5,                  -- Minimum fee (base fee)
+        minFee = 0.50,               -- Minimum fee (base fee)
     },
     
     -- Item Blacklist

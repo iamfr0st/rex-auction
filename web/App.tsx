@@ -1,6 +1,50 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { isDebug, useNuiEvent, fetchNui } from './hooks/useNui';
 
+// Money formatting utilities - all values are in CENTS
+const Money = {
+  // Format cents as dollar string with 2 decimal places
+  format: (cents: number | null | undefined): string => {
+    if (cents === null || cents === undefined || isNaN(cents)) return '$0.00';
+    const dollars = Math.floor(cents / 100);
+    const remainder = Math.abs(cents % 100);
+    const remainderStr = remainder < 10 ? '0' + remainder : remainder.toString();
+    return `$${dollars}.${remainderStr}`;
+  },
+  
+  // Format cents with commas for thousands
+  formatWithCommas: (cents: number | null | undefined): string => {
+    if (cents === null || cents === undefined || isNaN(cents)) return '$0.00';
+    const dollars = Math.floor(cents / 100);
+    const remainder = Math.abs(cents % 100);
+    const remainderStr = remainder < 10 ? '0' + remainder : remainder.toString();
+    const formattedDollars = dollars.toLocaleString();
+    return `$${formattedDollars}.${remainderStr}`;
+  },
+  
+  // Convert dollars (float) to cents (integer)
+  dollarsToCents: (dollars: number): number => {
+    return Math.round(dollars * 100);
+  },
+  
+  // Convert cents to dollars (float)
+  centsToDollars: (cents: number): number => {
+    return cents / 100;
+  },
+  
+  // Parse a dollar string input to cents
+  parseToCents: (input: string | number): number => {
+    if (typeof input === 'number') {
+      return Math.round(input * 100);
+    }
+    // Remove $ and whitespace
+    const cleaned = input.replace(/[$\s]/g, '');
+    const dollars = parseFloat(cleaned);
+    if (isNaN(dollars) || dollars < 0) return 0;
+    return Math.round(dollars * 100);
+  }
+};
+
 // Types
 interface ImageMeta {
   url: string;
@@ -38,22 +82,22 @@ interface Auction {
     imageMeta?: ImageMeta;
   };
   category?: string;
-  startingBid: number;
-  currentBid: number;
+  startingBidCents: number;
+  currentBidCents: number;
   highestBidder: Player | null;
   endTime: number;
   createdAt: number;
   status: 'active' | 'ended' | 'cancelled';
   totalBids: number;
   winner?: Player;
-  soldFor?: number;
+  soldForCents?: number;
 }
 
 interface BidEntry {
   playerId: number;
   playerName: string;
   citizenid: string;
-  amount: number;
+  amountCents: number;
   timestamp: number;
 }
 
@@ -66,8 +110,8 @@ interface Notification {
 
 interface PlayerData {
   inventory: InventoryItem[];
-  cash: number;
-  bank: number;
+  cashCents: number;
+  bankCents: number;
   citizenid: string;
   playerName: string;
   feeConfig?: FeeConfig;
@@ -85,18 +129,18 @@ interface FeeConfig {
 
 interface FeeBreakdown {
   enabled: boolean;
-  baseFee: number;
-  durationFee: number;
-  quantityFee: number;
-  total: number;
-  maxFee?: number;
-  minFee?: number;
+  baseFeeCents: number;
+  durationFeeCents: number;
+  quantityFeeCents: number;
+  totalCents: number;
+  maxFeeCents?: number;
+  minFeeCents?: number;
   wasCapped?: boolean;
 }
 
 interface FeePreview {
   breakdown: FeeBreakdown;
-  playerFunds: number;
+  playerFundsCents: number;
   canAfford: boolean;
 }
 
@@ -127,13 +171,13 @@ interface PendingItem {
   auctionId: string;
   image?: string;
   imageMeta?: ImageMeta;
-  soldFor: number;
+  soldForCents: number;
   sellerName: string;
   collectedAt?: number;
 }
 
 interface PendingMoney {
-  amount: number;
+  amountCents: number;
   reason: string;
   auctionId?: string;
   itemName?: string;
@@ -387,7 +431,7 @@ function AuctionCard({
         <div>
           <p className="text-stone-500 text-xs">Current Bid</p>
           <p className="text-amber-400 font-semibold">
-            ${auction.currentBid > 0 ? auction.currentBid.toLocaleString() : auction.startingBid.toLocaleString()}
+            {Money.formatWithCommas((auction.currentBidCents || 0) > 0 ? auction.currentBidCents : auction.startingBidCents)}
           </p>
         </div>
         <div className="text-right">
@@ -460,7 +504,7 @@ function AuctionListRow({
       {/* Bid Info */}
       <div className="text-right flex-shrink-0 w-28">
         <p className="text-amber-400 font-semibold text-sm">
-          ${auction.currentBid > 0 ? auction.currentBid.toLocaleString() : auction.startingBid.toLocaleString()}
+          {Money.formatWithCommas((auction.currentBidCents || 0) > 0 ? auction.currentBidCents : auction.startingBidCents)}
         </p>
         <p className="text-stone-500 text-xs">{auction.totalBids} bid{auction.totalBids !== 1 ? 's' : ''}</p>
       </div>
@@ -480,7 +524,7 @@ function CreateAuctionForm({
   onClose,
   isSubmitting,
   feeConfig,
-  playerFunds,
+  playerFundsCents,
   categories
 }: {
   inventory: InventoryItem[];
@@ -488,13 +532,13 @@ function CreateAuctionForm({
   onClose: () => void;
   isSubmitting: boolean;
   feeConfig?: FeeConfig;
-  playerFunds: number;
+  playerFundsCents: number;
   categories?: Category[];
 }) {
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [count, setCount] = useState(1);
-  const [startingBid, setStartingBid] = useState(100);
+  const [startingBidDollars, setStartingBidDollars] = useState<string>('1.00');
   const [duration, setDuration] = useState(3600);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -510,49 +554,51 @@ function CreateAuctionForm({
   }, [inventory, searchQuery]);
 
   // Calculate local fee preview (client-side for responsiveness)
+  // All values in CENTS
   const localFeePreview = useMemo(() => {
     if (!feeConfig || !feeConfig.enabled) {
-      return { enabled: false, total: 0, baseFee: 0, durationFee: 0, quantityFee: 0 };
+      return { enabled: false, totalCents: 0, baseFeeCents: 0, durationFeeCents: 0, quantityFeeCents: 0 };
     }
 
-    const baseFee = feeConfig.baseFee || 5;
-    const durationMultiplier = feeConfig.durationMultiplier || 2;
-    const quantityMultiplier = feeConfig.quantityMultiplier || 0.5;
-    const maxFee = feeConfig.maxFee || 500;
-    const minFee = feeConfig.minFee || 5;
+    const baseFeeCents = Money.dollarsToCents(feeConfig.baseFee || 5);
+    const durationMultiplierCents = Money.dollarsToCents(feeConfig.durationMultiplier || 2);
+    const quantityMultiplierCents = Money.dollarsToCents(feeConfig.quantityMultiplier || 0.5);
+    const maxFeeCents = Money.dollarsToCents(feeConfig.maxFee || 500);
+    const minFeeCents = Money.dollarsToCents(feeConfig.minFee || 5);
 
     const durationHours = duration / 3600;
-    const durationFee = durationMultiplier * durationHours;
-    const quantityFee = quantityMultiplier * count;
-    const totalFee = baseFee + durationFee + quantityFee;
+    const durationFeeCents = Math.floor(durationMultiplierCents * durationHours);
+    const quantityFeeCents = quantityMultiplierCents * count;
+    const totalFeeCents = baseFeeCents + durationFeeCents + quantityFeeCents;
 
-    const cappedFee = Math.max(minFee, Math.min(maxFee, totalFee));
-    const wasCapped = totalFee > maxFee;
+    const cappedFeeCents = Math.max(minFeeCents, Math.min(maxFeeCents, totalFeeCents));
+    const wasCapped = totalFeeCents > maxFeeCents;
 
     return {
       enabled: true,
-      baseFee,
-      durationFee: Math.floor(durationFee * 100) / 100,
-      quantityFee: Math.floor(quantityFee * 100) / 100,
-      total: Math.floor(cappedFee),
-      maxFee,
-      minFee,
+      baseFeeCents,
+      durationFeeCents,
+      quantityFeeCents,
+      totalCents: cappedFeeCents,
+      maxFeeCents,
+      minFeeCents,
       wasCapped
     };
   }, [feeConfig, duration, count]);
 
-  const canAffordFee = playerFunds >= localFeePreview.total;
+  const canAffordFee = playerFundsCents >= localFeePreview.totalCents;
   const selectedCategoryLabel = categories?.find(c => c.id === selectedCategory)?.label || '';
 
   const handleSubmit = (e: import('react').FormEvent) => {
     e.preventDefault();
-    if (!selectedItem || count < 1 || startingBid < 1) return;
+    const startingBidCents = Money.parseToCents(startingBidDollars);
+    if (!selectedItem || count < 1 || startingBidCents < 1) return;
     if (!canAffordFee) return;
     if (!selectedCategory) return;
     onCreate({
       itemName: selectedItem.name,
       count,
-      startingBid,
+      startingBid: startingBidCents,
       duration,
       category: selectedCategory
     });
@@ -663,12 +709,14 @@ function CreateAuctionForm({
               <div>
                 <label className="block text-stone-300 text-sm mb-2">Starting Bid ($)</label>
                 <input
-                  type="number"
-                  min={1}
-                  value={startingBid}
-                  onChange={(e) => setStartingBid(Math.max(1, parseInt(e.target.value) || 1))}
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={startingBidDollars}
+                  onChange={(e) => setStartingBidDollars(e.target.value)}
                   className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
                 />
+                <p className="text-stone-500 text-xs mt-1">Minimum: $0.01 (enter amount like 0.20 or 1.50)</p>
               </div>
 
               {/* Duration */}
@@ -710,33 +758,33 @@ function CreateAuctionForm({
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="text-stone-400 text-xs uppercase tracking-wide">Creation Fee</h4>
                     <span className={`text-lg font-bold ${canAffordFee ? 'text-amber-400' : 'text-red-400'}`}>
-                      ${localFeePreview.total}
+                      {Money.format(localFeePreview.totalCents)}
                     </span>
                   </div>
                   <div className="space-y-1.5 text-sm">
                     <div className="flex justify-between">
                       <span className="text-stone-500">Base fee</span>
-                      <span className="text-stone-300">${localFeePreview.baseFee}</span>
+                      <span className="text-stone-300">{Money.format(localFeePreview.baseFeeCents)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-stone-500">Duration ({(duration / 3600).toFixed(1)} hrs × ${feeConfig?.durationMultiplier || 2})</span>
-                      <span className="text-stone-300">${localFeePreview.durationFee.toFixed(2)}</span>
+                      <span className="text-stone-500">Duration ({(duration / 3600).toFixed(1)} hrs × {Money.format(feeConfig?.durationMultiplier ? Money.dollarsToCents(feeConfig.durationMultiplier) : 200)})</span>
+                      <span className="text-stone-300">{Money.format(localFeePreview.durationFeeCents)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-stone-500">Quantity ({count} × ${feeConfig?.quantityMultiplier || 0.5})</span>
-                      <span className="text-stone-300">${localFeePreview.quantityFee.toFixed(2)}</span>
+                      <span className="text-stone-500">Quantity ({count} × {Money.format(feeConfig?.quantityMultiplier ? Money.dollarsToCents(feeConfig.quantityMultiplier) : 50)})</span>
+                      <span className="text-stone-300">{Money.format(localFeePreview.quantityFeeCents)}</span>
                     </div>
                     {localFeePreview.wasCapped && (
                       <div className="flex justify-between text-amber-400">
                         <span>Fee capped at max</span>
-                        <span>${localFeePreview.maxFee}</span>
+                        <span>{Money.format(localFeePreview.maxFeeCents || 0)}</span>
                       </div>
                     )}
                   </div>
                   <div className="mt-3 pt-3 border-t border-stone-700/50 flex justify-between text-xs">
                     <span className="text-stone-500">Your funds</span>
                     <span className={canAffordFee ? 'text-emerald-400' : 'text-red-400'}>
-                      ${playerFunds.toLocaleString()}
+                      {Money.formatWithCommas(playerFundsCents)}
                     </span>
                   </div>
                 </div>
@@ -758,7 +806,7 @@ function CreateAuctionForm({
                   </div>
                   <div className="flex justify-between">
                     <span className="text-stone-400">Starting Bid</span>
-                    <span className="text-amber-400">${startingBid.toLocaleString()}</span>
+                    <span className="text-amber-400">{Money.format(Money.parseToCents(startingBidDollars))}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-stone-400">Duration</span>
@@ -767,7 +815,7 @@ function CreateAuctionForm({
                   {localFeePreview.enabled && (
                     <div className="flex justify-between">
                       <span className="text-stone-400">Creation Fee</span>
-                      <span className={canAffordFee ? 'text-amber-400' : 'text-red-400'}>${localFeePreview.total}</span>
+                      <span className={canAffordFee ? 'text-amber-400' : 'text-red-400'}>{Money.format(localFeePreview.totalCents)}</span>
                     </div>
                   )}
                 </div>
@@ -786,10 +834,10 @@ function CreateAuctionForm({
                 {!selectedCategory
                   ? 'Select a category first'
                   : !canAffordFee
-                    ? `Insufficient Funds (Need $${localFeePreview.total})`
+                    ? `Insufficient Funds (Need ${Money.format(localFeePreview.totalCents)})`
                     : isSubmitting
                       ? 'Creating...'
-                      : `Create Auction ($${localFeePreview.total} fee)`
+                      : `Create Auction (${Money.format(localFeePreview.totalCents)} fee)`
                 }
               </button>
             </>
@@ -804,7 +852,7 @@ function AuctionDetailView({
   auction,
   bidHistory,
   playerCitizenid,
-  playerFunds,
+  playerFundsCents,
   onPlaceBid,
   onCancel,
   onBack,
@@ -813,28 +861,31 @@ function AuctionDetailView({
   auction: Auction;
   bidHistory: BidEntry[];
   playerCitizenid: string;
-  playerFunds: { cash: number; bank: number };
-  onPlaceBid: (amount: number) => void;
+  playerFundsCents: { cashCents: number; bankCents: number };
+  onPlaceBid: (amountCents: number) => void;
   onCancel: () => void;
   onBack: () => void;
   categories?: Category[];
 }) {
-  const [bidAmount, setBidAmount] = useState(0);
+  const [bidAmountDollars, setBidAmountDollars] = useState<string>('');
   const [showConfirmCancel, setShowConfirmCancel] = useState(false);
 
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
   const categoryInfo = getCategoryInfo(auction.category, categories);
-  const totalFunds = playerFunds.cash + playerFunds.bank;
-  const minBid = auction.currentBid > 0 
-    ? Math.ceil(auction.currentBid * 1.05) 
-    : auction.startingBid;
-  const canBid = !isOwnAuction && auction.status === 'active' && totalFunds >= minBid;
+  const totalFundsCents = playerFundsCents.cashCents + playerFundsCents.bankCents;
+  const currentBidCents = auction.currentBidCents || 0;
+  const startingBidCents = auction.startingBidCents || 0;
+  const minBidCents = currentBidCents > 0 
+    ? Math.ceil(currentBidCents * 1.05) 
+    : startingBidCents;
+  const canBid = !isOwnAuction && auction.status === 'active' && totalFundsCents >= minBidCents;
   const canCancel = isOwnAuction && auction.totalBids === 0 && auction.status === 'active';
 
   const handleBid = () => {
-    if (bidAmount >= minBid && bidAmount <= totalFunds) {
-      onPlaceBid(bidAmount);
+    const bidCents = Money.parseToCents(bidAmountDollars);
+    if (bidCents >= minBidCents && bidCents <= totalFundsCents) {
+      onPlaceBid(bidCents);
     }
   };
 
@@ -886,7 +937,7 @@ function AuctionDetailView({
               <div>
                 <p className="text-stone-500 text-xs">Current Bid</p>
                 <p className="text-2xl font-bold text-amber-400">
-                  ${auction.currentBid > 0 ? auction.currentBid.toLocaleString() : auction.startingBid.toLocaleString()}
+                  {Money.formatWithCommas(currentBidCents > 0 ? currentBidCents : startingBidCents)}
                 </p>
               </div>
               <div className="text-right">
@@ -905,33 +956,33 @@ function AuctionDetailView({
               <div className="space-y-3">
                 <div className="flex gap-2">
                   <input
-                    type="number"
-                    min={minBid}
-                    max={totalFunds}
-                    value={bidAmount}
-                    onChange={(e) => setBidAmount(Math.max(minBid, parseInt(e.target.value) || minBid))}
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="Enter bid amount..."
+                    value={bidAmountDollars}
+                    onChange={(e) => setBidAmountDollars(e.target.value)}
                     className="flex-1 bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
                   />
                   <button
-                    onClick={() => setBidAmount(minBid)}
+                    onClick={() => setBidAmountDollars(Money.centsToDollars(minBidCents).toFixed(2))}
                     className="px-3 bg-stone-800 border border-stone-700 rounded-lg text-stone-300 text-sm hover:bg-stone-700"
                   >
                     Min
                   </button>
                 </div>
                 <p className="text-stone-500 text-xs">
-                  Min bid: ${minBid.toLocaleString()} | Your funds: ${totalFunds.toLocaleString()}
+                  Min bid: {Money.format(minBidCents)} | Your funds: {Money.formatWithCommas(totalFundsCents)}
                 </p>
                 <button
                   onClick={handleBid}
-                  disabled={!canBid || bidAmount < minBid}
+                  disabled={!canBid || Money.parseToCents(bidAmountDollars) < minBidCents}
                   className={`w-full py-3 rounded-lg font-semibold transition-colors ${
-                    canBid && bidAmount >= minBid
+                    canBid && Money.parseToCents(bidAmountDollars) >= minBidCents
                       ? 'bg-amber-700 hover:bg-amber-600 text-white'
                       : 'bg-stone-800 text-stone-500 cursor-not-allowed'
                   }`}
                 >
-                  {totalFunds < minBid ? 'Insufficient Funds' : `Place Bid: $${bidAmount.toLocaleString()}`}
+                  {totalFundsCents < minBidCents ? 'Insufficient Funds' : `Place Bid: ${Money.format(Money.parseToCents(bidAmountDollars))}`}
                 </button>
               </div>
             )}
@@ -989,7 +1040,7 @@ function AuctionDetailView({
                       {new Date(bid.timestamp * 1000).toLocaleTimeString()}
                     </p>
                   </div>
-                  <span className="text-amber-400 font-medium">${bid.amount.toLocaleString()}</span>
+                  <span className="text-amber-400 font-medium">{Money.format(bid.amountCents)}</span>
                 </div>
               ))}
             </div>
@@ -1070,7 +1121,7 @@ function CollectionKiosk({
   onBack: () => void;
 }) {
   const hasItems = pendingCollections.items.length > 0;
-  const hasMoney = pendingCollections.money && pendingCollections.money.amount > 0;
+  const hasMoney = pendingCollections.money && (pendingCollections.money.amountCents || 0) > 0;
 
   return (
     <div className="h-full flex flex-col">
@@ -1108,7 +1159,7 @@ function CollectionKiosk({
                 <div>
                   <p className="text-amber-300 text-sm font-medium">Sales Earnings</p>
                   <p className="text-white text-2xl font-bold">
-                    ${pendingCollections.money!.amount.toLocaleString()}
+                    {Money.formatWithCommas(pendingCollections.money!.amountCents || 0)}
                   </p>
                   <p className="text-stone-400 text-xs mt-1">
                     {pendingCollections.money!.reason}
@@ -1152,9 +1203,9 @@ function CollectionKiosk({
                     <div className="flex-1 min-w-0">
                       <p className="text-white font-medium truncate">{item.itemLabel}</p>
                       <p className="text-stone-400 text-sm">Quantity: {item.count}</p>
-                      {item.soldFor > 0 && (
+                      {(item.soldForCents || 0) > 0 && (
                         <p className="text-amber-400 text-sm mt-1">
-                          Won for ${item.soldFor.toLocaleString()}
+                          Won for {Money.format(item.soldForCents)}
                         </p>
                       )}
                       <p className="text-stone-500 text-xs mt-1">
@@ -1198,8 +1249,8 @@ export default function App() {
   const [view, setView] = useState<'list' | 'create' | 'detail' | 'collect'>('list');
   const [playerData, setPlayerData] = useState<PlayerData>({
     inventory: [],
-    cash: 0,
-    bank: 0,
+    cashCents: 0,
+    bankCents: 0,
     citizenid: '',
     playerName: ''
   });
@@ -1441,8 +1492,8 @@ export default function App() {
     fetchNui('createAuction', data, { success: true });
   }, []);
 
-  const handlePlaceBid = useCallback((auctionId: string, amount: number) => {
-    fetchNui('placeBid', { auctionId, amount }, { success: true });
+  const handlePlaceBid = useCallback((auctionId: string, amountCents: number) => {
+    fetchNui('placeBid', { auctionId, amountCents }, { success: true });
   }, []);
 
   const handleCancelAuction = useCallback((auctionId: string) => {
@@ -1669,10 +1720,10 @@ export default function App() {
           <div className="p-4 border-b border-stone-700/50">
             <p className="text-stone-400 text-xs mb-1">Available Funds</p>
             <p className="text-amber-400 text-lg font-semibold">
-              ${(playerData.cash + playerData.bank).toLocaleString()}
+              {Money.formatWithCommas(playerData.cashCents + playerData.bankCents)}
             </p>
             <p className="text-stone-500 text-xs mt-1">
-              Cash: ${playerData.cash.toLocaleString()} | Bank: ${playerData.bank.toLocaleString()}
+              Cash: {Money.format(playerData.cashCents)} | Bank: {Money.formatWithCommas(playerData.bankCents)}
             </p>
           </div>
 
@@ -1965,7 +2016,7 @@ export default function App() {
               onClose={() => setView('list')}
               isSubmitting={isSubmitting}
               feeConfig={playerData.feeConfig}
-              playerFunds={playerData.cash + playerData.bank}
+              playerFundsCents={playerData.cashCents + playerData.bankCents}
               categories={playerData.categories}
             />
           )}
@@ -1975,8 +2026,8 @@ export default function App() {
               auction={selectedAuction}
               bidHistory={bidHistory[selectedAuction.id] || []}
               playerCitizenid={playerData.citizenid}
-              playerFunds={{ cash: playerData.cash, bank: playerData.bank }}
-              onPlaceBid={(amount) => handlePlaceBid(selectedAuction.id, amount)}
+              playerFundsCents={{ cashCents: playerData.cashCents, bankCents: playerData.bankCents }}
+              onPlaceBid={(amountCents) => handlePlaceBid(selectedAuction.id, amountCents)}
               onCancel={() => handleCancelAuction(selectedAuction.id)}
               onBack={() => { setView('list'); setSelectedAuctionId(null); }}
               categories={playerData.categories}
