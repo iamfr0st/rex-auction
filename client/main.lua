@@ -1,10 +1,23 @@
-local RSGCore = exports['rsg-core']:GetCoreObject()
+local RSGCore = nil
 -- Auction System Client
 -- Handles NUI control, inventory checks, and server communication
 
 NUI = {}
 local isOpen = false
 local playerInventory = {}
+local isRSGCoreReady = false
+
+-- Wait for RSGCore to be ready
+CreateThread(function()
+    while not RSGCore do
+        RSGCore = exports['rsg-core']:GetCoreObject()
+        if RSGCore then
+            isRSGCoreReady = true
+            break
+        end
+        Wait(100)
+    end
+end)
 
 -- ============================================
 -- IMAGE MANAGEMENT
@@ -50,26 +63,33 @@ end
 local function refreshInventory()
     local items = {}
     
-    if not RSGCore then return items end
+    if not isRSGCoreReady or not RSGCore then 
+        return items 
+    end
     
     -- RSG Framework inventory
     local PlayerData = RSGCore.Functions.GetPlayerData()
-    local inventory = PlayerData.items
+    if not PlayerData then
+        return items
+    end
     
-    if inventory then
-        for slot, item in pairs(inventory) do
-            if item and item.amount > 0 then
-                local imageUrl = getItemImage(item.name)
-                table.insert(items, {
-                    name = item.name,
-                    label = item.label or item.name,
-                    count = item.amount,
-                    slot = slot,
-                    metadata = item.info or {},
-                    image = imageUrl,
-                    imageMeta = buildImageMeta(item.name)
-                })
-            end
+    local inventory = PlayerData.items
+    if not inventory then
+        return items
+    end
+    
+    for slot, item in pairs(inventory) do
+        if item and item.amount and item.amount > 0 then
+            local imageUrl = getItemImage(item.name)
+            table.insert(items, {
+                name = item.name,
+                label = item.label or item.name,
+                count = item.amount,
+                slot = slot,
+                metadata = item.info or {},
+                image = imageUrl,
+                imageMeta = buildImageMeta(item.name)
+            })
         end
     end
     
@@ -96,7 +116,7 @@ end
 
 function NUI.Open(data)
     if isOpen then return end
-    if not RSGCore then 
+    if not isRSGCoreReady or not RSGCore then 
         lib.notify({ title = 'Error', description = 'RSGCore not loaded yet', type = 'error' })
         return 
     end
@@ -106,6 +126,13 @@ function NUI.Open(data)
     -- Refresh inventory before opening
     local inventory = refreshInventory()
     local PlayerData = RSGCore.Functions.GetPlayerData()
+    
+    if not PlayerData then
+        isOpen = false
+        lib.notify({ title = 'Error', description = 'Could not load player data', type = 'error' })
+        return
+    end
+    
     local cashCents, bankCents = 0, 0
     
     if PlayerData.money then
@@ -116,6 +143,9 @@ function NUI.Open(data)
     
     -- Get fee configuration
     local feeConfig = Config.CreationFee or {}
+    
+    -- Get buyout configuration
+    local buyoutConfig = Config.Buyout or { enabled = false, minMultiplier = 1.5 }
     
     -- Build categories from config
     local categories = {}
@@ -138,6 +168,7 @@ function NUI.Open(data)
         citizenid = PlayerData.citizenid,
         playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown',
         feeConfig = feeConfig,
+        buyoutConfig = buyoutConfig,
         categories = categories
     })
     
@@ -196,6 +227,7 @@ RegisterNuiCallback('createAuction', function(data, cb)
         image = item.image,
         category = data.category,
         startingBid = data.startingBid or 1,  -- Already in cents from UI
+        buyoutPrice = data.buyoutPrice or nil,  -- Optional buyout price in cents
         duration = data.duration or 3600
     })
 
@@ -217,9 +249,19 @@ RegisterNuiCallback('cancelAuction', function(data, cb)
         cb({ success = false, error = 'Invalid auction ID' })
         return
     end
-    
+
     TriggerServerEvent('auction:server:cancelAuction', data.auctionId)
     cb({ success = true, message = 'Cancelling auction...' })
+end)
+
+RegisterNuiCallback('buyoutAuction', function(data, cb)
+    if not data.auctionId then
+        cb({ success = false, error = 'Invalid auction ID' })
+        return
+    end
+
+    TriggerServerEvent('auction:server:buyoutAuction', data.auctionId)
+    cb({ success = true, message = 'Processing buyout...' })
 end)
 
 RegisterNuiCallback('getInventory', function(_, cb)
@@ -253,9 +295,20 @@ RegisterNuiCallback('getBalance', function(_, cb)
 end)
 
 RegisterNuiCallback('searchAuctions', function(data, cb)
+    -- Validate input
+    if not data or type(data) ~= "table" then
+        cb({ success = false, error = 'Invalid search data' })
+        return
+    end
+    
     -- Get player citizenid for filtering
-    local PlayerData = RSGCore.Functions.GetPlayerData()
-    local citizenid = PlayerData and PlayerData.citizenid or nil
+    local citizenid = nil
+    if isRSGCoreReady and RSGCore then
+        local PlayerData = RSGCore.Functions.GetPlayerData()
+        if PlayerData then
+            citizenid = PlayerData.citizenid
+        end
+    end
     
     TriggerServerEvent('auction:server:searchAuctions', {
         query = data.query or '',
@@ -345,7 +398,7 @@ end)
 RegisterNetEvent('auction:client:cancelResult', function(result)
     if not isOpen then return end
     NUI.SendMessage('cancelResult', result)
-    
+
     if result.success then
         -- Refresh inventory
         refreshInventory()
@@ -353,36 +406,55 @@ RegisterNetEvent('auction:client:cancelResult', function(result)
     end
 end)
 
+RegisterNetEvent('auction:client:buyoutResult', function(result)
+    if not isOpen then return end
+    NUI.SendMessage('buyoutResult', result)
+end)
+
 RegisterNetEvent('auction:client:notification', function(data)
+    -- Validate data
+    if not data or type(data) ~= "table" then
+        return
+    end
+    
     -- Show notification even if UI is closed
     NUI.SendMessage('notification', data)
-    
+
     -- Also show in-game notification
     if data.type == 'outbid' then
         local newHighBidCents = data.newHighBidCents or Money.dollarsToCents(data.newHighBid)
+        local message = data.message or ('You were outbid on %s! New high bid: %s'):format(data.itemName or 'item', Money.format(newHighBidCents or 0))
         lib.notify({
             title = 'Auction',
-            description = ('You were outbid on %s! New high bid: %s'):format(data.itemName, Money.format(newHighBidCents)),
+            description = message,
             type = 'warning'
         })
     elseif data.type == 'won' then
         local amountCents = data.amountCents or Money.dollarsToCents(data.amount)
+        local title = data.isBuyout and 'Item Purchased!' or 'Auction Won!'
+        local desc = data.isBuyout
+            and ('You bought %s x%d for %s via buyout! Visit the auctioneer to collect.'):format(data.itemName or 'item', data.count or 1, Money.format(amountCents or 0))
+            or ('You won %s x%d for %s! Visit the auctioneer to collect.'):format(data.itemName or 'item', data.count or 1, Money.format(amountCents or 0))
         lib.notify({
-            title = 'Auction Won!',
-            description = ('You won %s x%d for %s! Visit the auctioneer to collect.'):format(data.itemName, data.count, Money.format(amountCents)),
+            title = title,
+            description = desc,
             type = 'success'
         })
     elseif data.type == 'sold' then
         local amountCents = data.amountCents or Money.dollarsToCents(data.amount)
+        local title = data.isBuyout and 'Item Sold via Buyout!' or 'Auction Sold!'
+        local desc = data.isBuyout
+            and ('Your %s x%d was purchased for %s via buyout! Visit the auctioneer to collect your earnings.'):format(data.itemName or 'item', data.count or 1, Money.format(amountCents or 0))
+            or ('Your %s x%d sold for %s! Visit the auctioneer to collect your earnings.'):format(data.itemName or 'item', data.count or 1, Money.format(amountCents or 0))
         lib.notify({
-            title = 'Auction Sold!',
-            description = ('Your %s x%d sold for %s! Visit the auctioneer to collect your earnings.'):format(data.itemName, data.count, Money.format(amountCents)),
+            title = title,
+            description = desc,
             type = 'success'
         })
     elseif data.type == 'expired' then
         lib.notify({
             title = 'Auction Expired',
-            description = ('Your %s x%d auction expired with no bids. Visit the auctioneer to retrieve your item.'):format(data.itemName, data.count),
+            description = ('Your %s x%d auction expired with no bids. Visit the auctioneer to retrieve your item.'):format(data.itemName or 'item', data.count or 1),
             type = 'info'
         })
     elseif data.type == 'info' and data.message then

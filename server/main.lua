@@ -15,6 +15,75 @@ local SAVE_FILE = 'auctions.json'
 local AUCTION_ID_PREFIX = 'AUC'
 
 -- ============================================
+-- SECURITY: RATE LIMITING
+-- ============================================
+
+local RateLimits = {
+    createAuction = { cooldown = 5000, actions = {} },      -- 5 seconds between auctions
+    placeBid = { cooldown = 1000, actions = {} },           -- 1 second between bids
+    buyoutAuction = { cooldown = 3000, actions = {} },      -- 3 seconds between buyouts
+    collectItem = { cooldown = 500, actions = {} },         -- 0.5 seconds between collections
+    collectMoney = { cooldown = 500, actions = {} },        -- 0.5 seconds between collections
+}
+
+local function checkRateLimit(actionType, src)
+    local limit = RateLimits[actionType]
+    if not limit then return true end
+    
+    local now = GetGameTimer()
+    local lastAction = limit.actions[src] or 0
+    
+    if now - lastAction < limit.cooldown then
+        return false, limit.cooldown - (now - lastAction)
+    end
+    
+    limit.actions[src] = now
+    return true
+end
+
+local function cleanupRateLimits()
+    local now = GetGameTimer()
+    local maxAge = 60000 -- Clean up entries older than 1 minute
+    
+    for actionType, limit in pairs(RateLimits) do
+        for src, lastAction in pairs(limit.actions) do
+            if now - lastAction > maxAge then
+                limit.actions[src] = nil
+            end
+        end
+    end
+end
+
+-- ============================================
+-- SECURITY: MUTEX LOCKS FOR AUCTION OPERATIONS
+-- ============================================
+
+local AuctionLocks = {}  -- [auctionId] = true when locked
+
+local function lockAuction(auctionId)
+    if AuctionLocks[auctionId] then
+        return false -- Already locked
+    end
+    AuctionLocks[auctionId] = true
+    return true
+end
+
+local function unlockAuction(auctionId)
+    AuctionLocks[auctionId] = nil
+end
+
+-- Execute function with auction lock (prevents race conditions)
+local function withAuctionLock(auctionId, func)
+    if not lockAuction(auctionId) then
+        return { success = false, error = 'Auction is currently being processed. Please try again.' }
+    end
+    
+    local result = func()
+    unlockAuction(auctionId)
+    return result
+end
+
+-- ============================================
 -- UTILITY FUNCTIONS
 -- ============================================
 
@@ -104,6 +173,10 @@ local function loadAuctions()
                 end
                 if auction.creationFee and not auction.creationFeeCents then
                     auction.creationFeeCents = Money.dollarsToCents(auction.creationFee)
+                end
+                -- Backfill buyout price (new field, defaults to nil)
+                if auction.buyoutPrice and not auction.buyoutPriceCents then
+                    auction.buyoutPriceCents = Money.dollarsToCents(auction.buyoutPrice)
                 end
             end
             
@@ -288,6 +361,77 @@ local function hasActiveAuctionForItem(citizenid, itemName)
         end
     end
     return nil
+end
+
+-- Count active auctions for a player
+local function countPlayerActiveAuctions(citizenid)
+    local count = 0
+    for auctionId, auction in pairs(Auctions) do
+        if auction.status == 'active' and auction.owner.citizenid == citizenid then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+-- ============================================
+-- SECURITY: INPUT VALIDATION
+-- ============================================
+
+local function validateAuctionId(auctionId)
+    if not auctionId or type(auctionId) ~= "string" then
+        return false, "Invalid auction ID"
+    end
+    if #auctionId > 50 then
+        return false, "Auction ID too long"
+    end
+    if not Auctions[auctionId] then
+        return false, "Auction not found"
+    end
+    return true
+end
+
+local function validatePositiveNumber(value, fieldName, maxValue)
+    if value == nil then
+        return false, fieldName .. " is required"
+    end
+    if type(value) ~= "number" then
+        value = tonumber(value)
+        if not value then
+            return false, fieldName .. " must be a number"
+        end
+    end
+    if value <= 0 then
+        return false, fieldName .. " must be positive"
+    end
+    if maxValue and value > maxValue then
+        return false, fieldName .. " exceeds maximum allowed"
+    end
+    return true, value
+end
+
+local function validateItemName(itemName)
+    if not itemName or type(itemName) ~= "string" then
+        return false, "Invalid item name"
+    end
+    if #itemName > 100 then
+        return false, "Item name too long"
+    end
+    -- Basic sanitization: only allow alphanumeric, underscore, hyphen
+    if itemName:match("[^%w_%-]") then
+        return false, "Item name contains invalid characters"
+    end
+    return true
+end
+
+local function validateCategory(categoryId)
+    if not categoryId or type(categoryId) ~= "string" then
+        return false, "Category is required"
+    end
+    if #categoryId > 50 then
+        return false, "Category ID too long"
+    end
+    return isValidCategory(categoryId)
 end
 
 -- Check if an item is blacklisted from auctions
@@ -529,6 +673,13 @@ local function createAuction(src, itemData)
         return { success = false, error = 'Invalid category selected' }
     end
     
+    -- Check max auctions per player limit
+    local maxAuctions = Config.MaxAuctionsPerPlayer or 10
+    local currentAuctionCount = countPlayerActiveAuctions(playerInfo.citizenid)
+    if currentAuctionCount >= maxAuctions then
+        return { success = false, error = ('You have reached the maximum of %d active auctions'):format(maxAuctions) }
+    end
+    
     -- Check for duplicate auction (same owner + same item)
     local existingAuction = hasActiveAuctionForItem(playerInfo.citizenid, itemData.itemName)
     if existingAuction then
@@ -566,6 +717,30 @@ local function createAuction(src, itemData)
     local minDuration = 60       -- 1 minute minimum for testing
     local maxDuration = 604800   -- 7 days maximum
     local duration = math.min(math.max(itemData.duration or 3600, minDuration), maxDuration)
+
+    -- Validate and set buyout price (optional)
+    local buyoutPriceCents = nil
+    if itemData.buyoutPrice and itemData.buyoutPrice > 0 then
+        -- Convert to cents if needed
+        buyoutPriceCents = itemData.buyoutPrice
+        if type(buyoutPriceCents) ~= "number" then
+            buyoutPriceCents = Money.parseToCents(tostring(itemData.buyoutPrice))
+        end
+
+        -- Validate buyout price is at least starting bid
+        if buyoutPriceCents < startingBidCents then
+            return { success = false, error = 'Buyout price must be at least the starting bid' }
+        end
+
+        -- Validate buyout meets minimum multiplier if configured
+        if Config.Buyout and Config.Buyout.enabled then
+            local minMultiplier = Config.Buyout.minMultiplier or 1.5
+            local minBuyoutCents = math.floor(startingBidCents * minMultiplier)
+            if buyoutPriceCents < minBuyoutCents then
+                return { success = false, error = ('Buyout price must be at least %s (%.1fx starting bid)'):format(Money.format(minBuyoutCents), minMultiplier) }
+            end
+        end
+    end
     
     -- Calculate and validate creation fee (returns cents)
     local creationFeeCents = calculateCreationFee(duration, itemData.count or 1)
@@ -634,6 +809,7 @@ local function createAuction(src, itemData)
         startingBidCents = startingBidCents,
         currentBidCents = 0,
         highestBidder = nil,
+        buyoutPriceCents = buyoutPriceCents,
         endTime = now + duration,
         createdAt = now,
         status = 'active',
@@ -815,6 +991,195 @@ local function placeBid(src, auctionId, bidAmountCents)
         bidHistory = BidHistory[auctionId]
     })
     
+    return { success = true, auction = auction }
+end
+
+local function buyoutAuction(src, auctionId)
+    local playerInfo = getPlayerInfo(src)
+    if not playerInfo then
+        return { success = false, error = 'Player not found' }
+    end
+
+    local auction = Auctions[auctionId]
+    if not auction then
+        return { success = false, error = 'Auction not found' }
+    end
+
+    if auction.status ~= 'active' then
+        return { success = false, error = 'This auction has ended' }
+    end
+
+    -- Check if auction ended
+    if os.time() >= auction.endTime then
+        endAuction(auctionId)
+        return { success = false, error = 'This auction has ended' }
+    end
+
+    -- Check if buyout is available
+    if not auction.buyoutPriceCents or auction.buyoutPriceCents <= 0 then
+        return { success = false, error = 'This auction does not have a buyout price' }
+    end
+
+    -- Owner cannot buyout own auction
+    if auction.owner.citizenid == playerInfo.citizenid then
+        return { success = false, error = 'You cannot buyout your own auction' }
+    end
+
+    local buyoutPriceCents = auction.buyoutPriceCents
+
+    -- Check if player has enough money
+    local cashCents, bankCents = getPlayerMoney(src)
+    local totalAvailableCents = cashCents + bankCents
+
+    if totalAvailableCents < buyoutPriceCents then
+        return { success = false, error = 'Insufficient funds for buyout', requiredCents = buyoutPriceCents, availableCents = totalAvailableCents }
+    end
+
+    -- Handle previous highest bidder refund if exists
+    if auction.highestBidder and auction.highestBidder.citizenid ~= playerInfo.citizenid then
+        local prevBidderCitizenid = auction.highestBidder.citizenid
+
+        -- Return funds to previous bidder (remove from escrow)
+        if Escrow.funds[auctionId] and Escrow.funds[auctionId][prevBidderCitizenid] then
+            local refundAmountCents = Escrow.funds[auctionId][prevBidderCitizenid]
+            Escrow.funds[auctionId][prevBidderCitizenid] = nil
+
+            -- Find the previous bidder's server ID and refund
+            for _, p in ipairs(GetPlayers()) do
+                local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+                if pPlayer and pPlayer.PlayerData.citizenid == prevBidderCitizenid then
+                    addPlayerMoney(tonumber(p), refundAmountCents)
+                    TriggerClientEvent('auction:client:notification', tonumber(p), {
+                        type = 'outbid',
+                        auctionId = auctionId,
+                        itemName = auction.item.label,
+                        newHighBidCents = buyoutPriceCents,
+                        message = 'Someone purchased the item via buyout!'
+                    })
+                    break
+                end
+            end
+        end
+    end
+
+    -- Deduct buyout price from buyer
+    if not removePlayerMoney(src, buyoutPriceCents) then
+        return { success = false, error = 'Failed to process payment' }
+    end
+
+    -- Clear the auction timer
+    if AuctionEndTimers[auctionId] then
+        ClearTimeout(AuctionEndTimers[auctionId])
+        AuctionEndTimers[auctionId] = nil
+    end
+
+    -- Update auction status
+    auction.status = 'ended'
+    auction.winner = {
+        id = src,
+        name = playerInfo.name,
+        citizenid = playerInfo.citizenid
+    }
+    auction.soldForCents = buyoutPriceCents
+    auction.totalBids = auction.totalBids + 1
+
+    -- Add to bid history for record
+    table.insert(BidHistory[auctionId], 1, {
+        playerId = src,
+        playerName = playerInfo.name,
+        citizenid = playerInfo.citizenid,
+        amountCents = buyoutPriceCents,
+        timestamp = os.time(),
+        isBuyout = true
+    })
+
+    -- Get item from escrow
+    local itemData = Escrow.items[auctionId]
+    local sellerCitizenid = auction.owner.citizenid
+
+    -- Queue item for buyer to collect at auctioneer
+    if itemData then
+        queueItemCollection(
+            playerInfo.citizenid,
+            itemData.itemName,
+            auction.item.label,
+            itemData.count,
+            itemData.metadata,
+            auctionId,
+            auction.item.image,
+            buyoutPriceCents,
+            auction.owner.name
+        )
+
+        -- Notify buyer
+        TriggerClientEvent('auction:client:notification', src, {
+            type = 'won',
+            auctionId = auctionId,
+            itemName = auction.item.label,
+            count = auction.item.count,
+            amountCents = buyoutPriceCents,
+            isBuyout = true
+        })
+
+        -- Queue money for seller to collect at auctioneer
+        queueMoneyCollection(
+            sellerCitizenid,
+            buyoutPriceCents,
+            'auction buyout: ' .. auctionId,
+            auctionId,
+            auction.item.label,
+            auction.owner.name
+        )
+
+        -- Notify seller
+        for _, p in ipairs(GetPlayers()) do
+            local pPlayer = RSGCore.Functions.GetPlayer(tonumber(p))
+            if pPlayer and pPlayer.PlayerData.citizenid == sellerCitizenid then
+                TriggerClientEvent('auction:client:notification', tonumber(p), {
+                    type = 'sold',
+                    auctionId = auctionId,
+                    itemName = auction.item.label,
+                    count = auction.item.count,
+                    amountCents = buyoutPriceCents,
+                    isBuyout = true
+                })
+                break
+            end
+        end
+
+        Escrow.items[auctionId] = nil
+    end
+
+    -- Clear escrow funds
+    Escrow.funds[auctionId] = nil
+
+    saveAuctions()
+
+    -- Send webhook notification
+    SendWebhook('auctionBuyout', {
+        auctionId = auctionId,
+        itemName = auction.item.name,
+        itemLabel = auction.item.label,
+        count = auction.item.count,
+        buyoutPriceCents = buyoutPriceCents,
+        buyerName = playerInfo.name,
+        sellerName = auction.owner.name,
+        totalBids = auction.totalBids
+    })
+
+    -- Broadcast auction ended via buyout
+    broadcastToAll('auctionEnded', {
+        auctionId = auctionId,
+        winner = auction.winner,
+        soldForCents = buyoutPriceCents,
+        status = auction.status,
+        isBuyout = true
+    })
+
+    print(('[Auction] Buyout completed: %s purchased %s x%d for %s'):format(
+        playerInfo.name, auction.item.label, auction.item.count, Money.format(buyoutPriceCents)
+    ))
+
     return { success = true, auction = auction }
 end
 
@@ -1138,13 +1503,67 @@ end)
 
 RegisterNetEvent('auction:server:createAuction', function(data)
     local src = source
+    
+    -- Rate limit check
+    local allowed, remaining = checkRateLimit('createAuction', src)
+    if not allowed then
+        TriggerClientEvent('auction:client:createResult', src, {
+            success = false,
+            error = ('Please wait %.1f seconds before creating another auction'):format(remaining / 1000)
+        })
+        return
+    end
+    
+    -- Input validation
+    if not data or type(data) ~= "table" then
+        TriggerClientEvent('auction:client:createResult', src, {
+            success = false,
+            error = 'Invalid request data'
+        })
+        return
+    end
+    
     local result = createAuction(src, data)
     TriggerClientEvent('auction:client:createResult', src, result)
 end)
 
 RegisterNetEvent('auction:server:placeBid', function(auctionId, amount)
     local src = source
+    
+    -- Rate limit check
+    local allowed, remaining = checkRateLimit('placeBid', src)
+    if not allowed then
+        TriggerClientEvent('auction:client:bidResult', src, {
+            success = false,
+            error = ('Please wait %.1f seconds before placing another bid'):format(remaining / 1000)
+        })
+        return
+    end
+    
+    -- Input validation
+    local valid, err = validateAuctionId(auctionId)
+    if not valid then
+        TriggerClientEvent('auction:client:bidResult', src, { success = false, error = err })
+        return
+    end
+    
+    local validAmount, amountErr = validatePositiveNumber(amount, "Bid amount")
+    if not validAmount then
+        TriggerClientEvent('auction:client:bidResult', src, { success = false, error = amountErr })
+        return
+    end
+    
+    -- Use mutex lock for race condition prevention
+    if not lockAuction(auctionId) then
+        TriggerClientEvent('auction:client:bidResult', src, {
+            success = false,
+            error = 'Auction is currently being processed. Please try again.'
+        })
+        return
+    end
+    
     local result = placeBid(src, auctionId, amount)
+    unlockAuction(auctionId)
     TriggerClientEvent('auction:client:bidResult', src, result)
 end)
 
@@ -1152,6 +1571,40 @@ RegisterNetEvent('auction:server:cancelAuction', function(auctionId)
     local src = source
     local result = cancelAuction(src, auctionId)
     TriggerClientEvent('auction:client:cancelResult', src, result)
+end)
+
+RegisterNetEvent('auction:server:buyoutAuction', function(auctionId)
+    local src = source
+    
+    -- Rate limit check
+    local allowed, remaining = checkRateLimit('buyoutAuction', src)
+    if not allowed then
+        TriggerClientEvent('auction:client:buyoutResult', src, {
+            success = false,
+            error = ('Please wait %.1f seconds before another buyout'):format(remaining / 1000)
+        })
+        return
+    end
+    
+    -- Input validation
+    local valid, err = validateAuctionId(auctionId)
+    if not valid then
+        TriggerClientEvent('auction:client:buyoutResult', src, { success = false, error = err })
+        return
+    end
+    
+    -- Use mutex lock for race condition prevention
+    if not lockAuction(auctionId) then
+        TriggerClientEvent('auction:client:buyoutResult', src, {
+            success = false,
+            error = 'Auction is currently being processed. Please try again.'
+        })
+        return
+    end
+    
+    local result = buyoutAuction(src, auctionId)
+    unlockAuction(auctionId)
+    TriggerClientEvent('auction:client:buyoutResult', src, result)
 end)
 
 RegisterNetEvent('auction:server:getPlayerAuctions', function()
@@ -1239,6 +1692,29 @@ end)
 -- Collect a specific item
 RegisterNetEvent('auction:server:collectItem', function(auctionId, itemName)
     local src = source
+    
+    -- Rate limit check
+    local allowed, remaining = checkRateLimit('collectItem', src)
+    if not allowed then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Please wait before collecting again',
+            type = 'item'
+        })
+        return
+    end
+    
+    -- Input validation
+    local validItem, itemErr = validateItemName(itemName)
+    if not validItem then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = itemErr,
+            type = 'item'
+        })
+        return
+    end
+    
     local Player = getPlayer(src)
     if not Player then 
         TriggerClientEvent('auction:client:collectionResult', src, {
@@ -1336,6 +1812,18 @@ end)
 -- Collect money
 RegisterNetEvent('auction:server:collectMoney', function()
     local src = source
+    
+    -- Rate limit check
+    local allowed, remaining = checkRateLimit('collectMoney', src)
+    if not allowed then
+        TriggerClientEvent('auction:client:collectionResult', src, {
+            success = false,
+            error = 'Please wait before collecting again',
+            type = 'money'
+        })
+        return
+    end
+    
     local Player = getPlayer(src)
     if not Player then 
         TriggerClientEvent('auction:client:collectionResult', src, {

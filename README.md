@@ -4,16 +4,39 @@ A real-time auction house system for RedM servers running RSG Framework. Players
 
 [Buy me a Beer](https://buymeacoffee.com/rexshack)
 
+## Changelog
+
+### v2.1.0 - Security & Stability Update
+
+**Security Improvements:**
+- Added rate limiting for all auction operations (create, bid, buyout, collect) to prevent spam attacks
+- Implemented mutex locks on auction operations to prevent race conditions and double-spending
+- Added comprehensive input validation on all server events (auctionId, item names, bid amounts)
+- Added webhook URL validation to prevent SSRF attacks (only Discord URLs allowed)
+- Added maximum auctions per player limit (configurable, default: 10)
+
+**Client Stability:**
+- Added proper nil guards for RSGCore availability checks
+- Added PlayerData validation before accessing properties
+- Added inventory access safety checks
+- Added input validation on NUI callbacks
+
+**New Configuration Options:**
+- `Config.MaxAuctionsPerPlayer` - Maximum active auctions per player (default: 10)
+- `Config.RateLimits` - Cooldown times in milliseconds for each action type
+
 ## Features
 
 - **Real-time Auctions**: Live bidding with instant updates across all connected players
 - **NPC Auctioneers**: Interact with NPCs using ox_target to open the auction UI
 - **Item Categories**: Organize auctions by category with automatic item classification
+- **Buyout / "Buy Now"**: Sellers can set a buyout price for immediate purchase (configurable minimum multiplier)
+- **Auction Creation Fees**: Optional fees based on duration and quantity (configurable)
 - **Collection Kiosk**: Winners collect items and sellers collect money at the auctioneer NPC
 - **Item Escrow**: Items are held securely during active auctions
 - **Bid Escrow**: Bid amounts are held and automatically refunded if outbid
 - **Offline Queuing**: Pending collections are saved and available when players reconnect
-- **Discord Webhooks**: Optional notifications for auction events (created, bids, wins, expires)
+- **Discord Webhooks**: Optional notifications for auction events (created, bids, wins, expires, buyouts)
 - **High Value Alerts**: Separate webhook notifications for high-value sales
 - **Admin Commands**: In-game webhook configuration for server staff
 
@@ -146,20 +169,48 @@ This starts a local dev server with hot-reload. Access the preview in your brows
 ```lua
 Config = {
     -- Auction Limits
-    MinStartingBid = 1,
+    MinStartingBid = 0.01,      -- Minimum starting bid in dollars (1 cent)
     MinDuration = 60,           -- 1 minute minimum
     MaxDuration = 604800,       -- 7 days maximum
     DefaultDuration = 3600,     -- 1 hour default
-    
+    MaxAuctionsPerPlayer = 10,  -- Maximum active auctions per player
+
     -- Bid Settings
     MinBidIncrement = 0.05,     -- 5% minimum increase
-    
+
+    -- Buyout Price Settings
+    Buyout = {
+        enabled = true,         -- Enable/disable buyout feature
+        minMultiplier = 1.5,    -- Buyout must be at least 1.5x starting bid
+    },
+
+    -- Auction Creation Fee Settings
+    CreationFee = {
+        enabled = true,         -- Enable/disable creation fees
+        baseFee = 0.50,         -- Base fee for any auction
+        durationMultiplier = 0.10,  -- Fee per hour of duration
+        quantityMultiplier = 0.10,  -- Fee per item quantity
+        maxFee = 500,           -- Maximum fee cap
+        minFee = 0.50,          -- Minimum fee (base fee)
+    },
+
+    -- Rate Limiting (milliseconds between actions)
+    RateLimits = {
+        createAuction = 5000,   -- 5 seconds between creating auctions
+        placeBid = 1000,        -- 1 second between bids
+        buyoutAuction = 3000,   -- 3 seconds between buyouts
+        collectItem = 500,      -- 0.5 seconds between item collections
+        collectMoney = 500,     -- 0.5 seconds between money collections
+    },
+
     -- Blacklisted Items (cannot be auctioned)
     BlacklistedItems = {
-        'money',
-        'black_money',
+        'dollar',
+        'cent',
+        'blood_dollar',
+        'blood_cent',
     },
-    
+
     -- NPC Auctioneers
     AuctioneerNPCs = {
         {
@@ -169,7 +220,7 @@ Config = {
             name = 'Valentine Auctioneer',
         },
     },
-    
+
     -- Interaction
     InteractionDistance = 2.5,
 }
@@ -222,16 +273,18 @@ Config.Webhooks = {
         auctionCreated = nil,
         bidPlaced = nil,
         auctionWon = nil,
+        auctionBuyout = nil,      -- Buyout purchases
         auctionExpired = nil,
         auctionCancelled = nil,
         highValueSale = nil,
     },
-    
+
     -- Enable/disable events
     enabled = {
         auctionCreated = true,
         bidPlaced = false,      -- Off by default (can be spammy)
         auctionWon = true,
+        auctionBuyout = true,   -- Buyout purchase notifications
         auctionExpired = true,
         auctionCancelled = true,
         highValueSale = true,
@@ -257,11 +310,12 @@ Config.Webhooks = {
 
 ### Player Actions
 
-1. **List an Item**: Approach an NPC auctioneer, interact via ox_target, select an item from your inventory, choose a category, set starting bid and duration
+1. **List an Item**: Approach an NPC auctioneer, interact via ox_target, select an item from your inventory, choose a category, set starting bid, optional buyout price, and duration
 2. **Place a Bid**: Browse active auctions by category, enter your bid amount (must be 5% higher than current bid)
-3. **Cancel Auction**: Cancel your own auctions (only if no bids placed)
-4. **Collect Winnings**: When you win an auction, visit the auctioneer NPC and use the "Collect Items" tab to claim your items
-5. **Collect Earnings**: When your auction sells, visit the auctioneer NPC to collect your money
+3. **Buy Now**: If a buyout price is set, purchase the item immediately for that price (bypasses bidding)
+4. **Cancel Auction**: Cancel your own auctions (only if no bids placed)
+5. **Collect Winnings**: When you win an auction, visit the auctioneer NPC and use the "Collect Items" tab to claim your items
+6. **Collect Earnings**: When your auction sells, visit the auctioneer NPC to collect your money
 
 ### Collection System
 
@@ -290,6 +344,7 @@ The collection UI shows:
 - `auctionCreated` - New auctions listed
 - `bidPlaced` - Bid notifications
 - `auctionWon` - Auction winners
+- `auctionBuyout` - Items purchased via buyout
 - `auctionExpired` - Expired auctions (no bids)
 - `auctionCancelled` - Cancelled auctions
 - `highValueSale` - High value sale alerts
@@ -327,24 +382,40 @@ TriggerServerEvent('auction:server:createAuction', {
     itemLabel = 'Apple',
     count = 10,
     startingBid = 50,
+    buyoutPrice = 100,        -- Optional: immediate purchase price
     duration = 3600,
-    category = 'provisions'  -- Category ID from Config.Categories
+    category = 'provisions'   -- Category ID from Config.Categories
 })
 
 -- Place a bid
 TriggerServerEvent('auction:server:placeBid', auctionId, bidAmount)
 
+-- Buyout an auction (immediate purchase)
+TriggerServerEvent('auction:server:buyoutAuction', auctionId)
+
 -- Cancel an auction
 TriggerServerEvent('auction:server:cancelAuction', auctionId)
+
+-- Get player's active auctions
+TriggerServerEvent('auction:server:getPlayerAuctions')
+
+-- Get player's balance
+TriggerServerEvent('auction:server:getBalance')
+
+-- Calculate fee preview before creating auction
+TriggerServerEvent('auction:server:calculateFeePreview', {
+    duration = 3600,
+    count = 10
+})
 
 -- Get pending collections (items/money to collect)
 TriggerServerEvent('auction:server:getPendingCollections')
 
 -- Collect a pending item
-TriggerServerEvent('auction:server:collectItem', itemIndex)
+TriggerServerEvent('auction:server:collectItem', auctionId, itemName)
 
 -- Collect pending money
-TriggerServerEvent('auction:server:collectMoney', moneyIndex)
+TriggerServerEvent('auction:server:collectMoney')
 ```
 
 ### Client Events (Listen for responses)
@@ -356,9 +427,54 @@ RegisterNetEvent('auction:client:receiveAuctions', function(data)
     -- data.bidHistory - table of bid histories
 end)
 
+-- Receive search results
+RegisterNetEvent('auction:client:receiveSearchResults', function(data)
+    -- data.auctions - table of matching auctions
+end)
+
 -- Receive category list
 RegisterNetEvent('auction:client:receiveCategories', function(categories)
     -- categories - table of { id, label, icon, description }
+end)
+
+-- Receive player's active auctions
+RegisterNetEvent('auction:client:receivePlayerAuctions', function(data)
+    -- data.auctions - table of player's auctions
+end)
+
+-- Auction creation result
+RegisterNetEvent('auction:client:createResult', function(result)
+    -- result.success - boolean
+    -- result.error - error message if failed
+    -- result.auctionId - ID of created auction if successful
+end)
+
+-- Bid result
+RegisterNetEvent('auction:client:bidResult', function(result)
+    -- result.success - boolean
+    -- result.error - error message if failed
+end)
+
+-- Buyout result
+RegisterNetEvent('auction:client:buyoutResult', function(result)
+    -- result.success - boolean
+    -- result.error - error message if failed
+end)
+
+-- Cancel result
+RegisterNetEvent('auction:client:cancelResult', function(result)
+    -- result.success - boolean
+    -- result.error - error message if failed
+end)
+
+-- Fee preview result
+RegisterNetEvent('auction:client:feePreview', function(data)
+    -- data.fee - calculated fee amount
+end)
+
+-- Balance updated
+RegisterNetEvent('auction:client:balanceUpdated', function(data)
+    -- data.balance - player's money balance
 end)
 
 -- Receive pending collections
@@ -368,15 +484,15 @@ RegisterNetEvent('auction:client:receivePendingCollections', function(data)
 end)
 
 -- Collection result
-RegisterNetEvent('auction:client:collectionResult', function(data)
-    -- data.success - boolean
-    -- data.error - error message if failed
-    -- data.type - 'item' or 'money'
+RegisterNetEvent('auction:client:collectionResult', function(result)
+    -- result.success - boolean
+    -- result.error - error message if failed
+    -- result.type - 'item' or 'money'
 end)
 
 -- Notification events
 RegisterNetEvent('auction:client:notification', function(data)
-    -- data.type: 'won', 'sold', 'outbid', 'expired', 'info'
+    -- data.type: 'won', 'sold', 'outbid', 'expired', 'info', 'buyout'
     -- data.message: notification text
 end)
 ```

@@ -81,9 +81,25 @@ Config = {
     MinDuration = 60,           -- Minimum auction duration in seconds (1 minute)
     MaxDuration = 604800,       -- Maximum auction duration in seconds (7 days)
     DefaultDuration = 3600,     -- Default duration (1 hour)
+    MaxAuctionsPerPlayer = 10,  -- Maximum active auctions per player
+    
+    -- Rate Limiting (milliseconds between actions)
+    RateLimits = {
+        createAuction = 5000,   -- 5 seconds between creating auctions
+        placeBid = 1000,        -- 1 second between bids
+        buyoutAuction = 3000,   -- 3 seconds between buyouts
+        collectItem = 500,      -- 0.5 seconds between item collections
+        collectMoney = 500,     -- 0.5 seconds between money collections
+    },
     
     -- Bid Settings
     MinBidIncrement = 0.05,     -- 5% minimum increase over current bid
+
+    -- Buyout Price Settings
+    Buyout = {
+        enabled = true,              -- Enable/disable buyout feature
+        minMultiplier = 1.5,         -- Buyout must be at least 1.5x the starting bid
+    },
     
     -- Auction Creation Fee Settings
     -- Fee formula: BaseFee + (DurationMultiplier * hours) + (QuantityMultiplier * quantity)

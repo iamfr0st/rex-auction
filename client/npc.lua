@@ -62,6 +62,12 @@ local function removeTargetFromEntity(entity)
 end
 
 local function spawnNPC(npcConfig, index)
+    -- Validate npcConfig
+    if not npcConfig or type(npcConfig) ~= "table" then
+        print('[Auction NPC] Invalid NPC config at index ' .. tostring(index))
+        return nil
+    end
+    
     if SpawnedNPCs[index] and DoesEntityExist(SpawnedNPCs[index].entity) then
         return SpawnedNPCs[index].entity
     end
@@ -71,6 +77,12 @@ local function spawnNPC(npcConfig, index)
     
     local coords = npcConfig.coords
     local heading = npcConfig.heading
+    
+    -- Validate coords
+    if not coords or not coords.x or not coords.y or not coords.z then
+        print('[Auction NPC] Invalid coords for NPC at index ' .. tostring(index))
+        return nil
+    end
     
     -- Create ped at coords
     local ped = CreatePed(modelHash, coords.x, coords.y, coords.z -1, heading, true, true, true, true)

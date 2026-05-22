@@ -84,6 +84,7 @@ interface Auction {
   category?: string;
   startingBidCents: number;
   currentBidCents: number;
+  buyoutPriceCents?: number;
   highestBidder: Player | null;
   endTime: number;
   createdAt: number;
@@ -115,6 +116,7 @@ interface PlayerData {
   citizenid: string;
   playerName: string;
   feeConfig?: FeeConfig;
+  buyoutConfig?: BuyoutConfig;
   categories?: Category[];
 }
 
@@ -158,6 +160,11 @@ interface Category {
   label: string;
   icon: string;
   description: string;
+}
+
+interface BuyoutConfig {
+  enabled: boolean;
+  minMultiplier: number;
 }
 
 type ViewMode = 'card' | 'list';
@@ -440,6 +447,13 @@ function AuctionCard({
         </div>
       </div>
 
+      {auction.buyoutPriceCents && auction.buyoutPriceCents > 0 && (
+        <div className="mt-2 pt-2 border-t border-stone-700/50 flex items-center justify-between">
+          <span className="text-emerald-400 text-xs font-medium">Buy Now</span>
+          <span className="text-emerald-300 text-sm font-semibold">{Money.format(auction.buyoutPriceCents)}</span>
+        </div>
+      )}
+
       <div className="mt-3 pt-3 border-t border-stone-700/50 flex justify-between text-xs text-stone-500">
         <span>By {auction.owner.name}</span>
         <span>{auction.totalBids} bid{auction.totalBids !== 1 ? 's' : ''}</span>
@@ -508,7 +522,15 @@ function AuctionListRow({
         </p>
         <p className="text-stone-500 text-xs">{auction.totalBids} bid{auction.totalBids !== 1 ? 's' : ''}</p>
       </div>
-      
+
+      {/* Buyout */}
+      {auction.buyoutPriceCents && auction.buyoutPriceCents > 0 && (
+        <div className="text-right flex-shrink-0 w-24">
+          <p className="text-emerald-400 font-semibold text-sm">{Money.format(auction.buyoutPriceCents)}</p>
+          <p className="text-emerald-600 text-xs">Buy Now</p>
+        </div>
+      )}
+
       {/* Timer */}
       <div className="text-right flex-shrink-0 w-24">
         <CountdownTimer endTime={auction.endTime} />
@@ -524,14 +546,16 @@ function CreateAuctionForm({
   onClose,
   isSubmitting,
   feeConfig,
+  buyoutConfig,
   playerFundsCents,
   categories
 }: {
   inventory: InventoryItem[];
-  onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number; category: string }) => void;
+  onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number; category: string; buyoutPrice?: number }) => void;
   onClose: () => void;
   isSubmitting: boolean;
   feeConfig?: FeeConfig;
+  buyoutConfig?: BuyoutConfig;
   playerFundsCents: number;
   categories?: Category[];
 }) {
@@ -539,6 +563,7 @@ function CreateAuctionForm({
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [count, setCount] = useState(1);
   const [startingBidDollars, setStartingBidDollars] = useState<string>('1.00');
+  const [buyoutDollars, setBuyoutDollars] = useState<string>('');
   const [duration, setDuration] = useState(3600);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -589,18 +614,25 @@ function CreateAuctionForm({
   const canAffordFee = playerFundsCents >= localFeePreview.totalCents;
   const selectedCategoryLabel = categories?.find(c => c.id === selectedCategory)?.label || '';
 
+  // Calculate buyout validation
+  const startingBidCents = Money.parseToCents(startingBidDollars);
+  const buyoutCents = buyoutDollars ? Money.parseToCents(buyoutDollars) : 0;
+  const minBuyoutCents = buyoutConfig?.enabled ? Math.ceil(startingBidCents * (buyoutConfig.minMultiplier || 1.5)) : 0;
+  const isBuyoutValid = !buyoutDollars || buyoutCents >= minBuyoutCents;
+
   const handleSubmit = (e: import('react').FormEvent) => {
     e.preventDefault();
-    const startingBidCents = Money.parseToCents(startingBidDollars);
     if (!selectedItem || count < 1 || startingBidCents < 1) return;
     if (!canAffordFee) return;
     if (!selectedCategory) return;
+    if (buyoutDollars && !isBuyoutValid) return;
     onCreate({
       itemName: selectedItem.name,
       count,
       startingBid: startingBidCents,
       duration,
-      category: selectedCategory
+      category: selectedCategory,
+      buyoutPrice: buyoutDollars ? buyoutCents : undefined
     });
   };
 
@@ -719,6 +751,38 @@ function CreateAuctionForm({
                 <p className="text-stone-500 text-xs mt-1">Minimum: $0.01 (enter amount like 0.20 or 1.50)</p>
               </div>
 
+              {/* Buyout Price */}
+              {buyoutConfig?.enabled && (
+                <div>
+                  <label className="block text-stone-300 text-sm mb-2">Buyout Price ($) <span className="text-stone-500 text-xs">(optional)</span></label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="Leave empty for no buyout"
+                    value={buyoutDollars}
+                    onChange={(e) => setBuyoutDollars(e.target.value)}
+                    className={`w-full bg-stone-800 border rounded-lg px-3 py-2 text-white focus:outline-none ${
+                      buyoutDollars && !isBuyoutValid ? 'border-red-600 focus:border-red-500' : 'border-stone-700 focus:border-amber-600'
+                    }`}
+                  />
+                  {buyoutDollars && !isBuyoutValid && (
+                    <p className="text-red-400 text-xs mt-1">
+                      Minimum buyout: {Money.format(minBuyoutCents)} ({buyoutConfig.minMultiplier}x starting bid)
+                    </p>
+                  )}
+                  {buyoutDollars && isBuyoutValid && (
+                    <p className="text-emerald-400 text-xs mt-1">
+                      Buyers can instantly purchase for {Money.format(buyoutCents)}
+                    </p>
+                  )}
+                  {!buyoutDollars && (
+                    <p className="text-stone-500 text-xs mt-1">
+                      Minimum: {Money.format(minBuyoutCents)} ({buyoutConfig.minMultiplier}x starting bid)
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Duration */}
               <div>
                 <label className="block text-stone-300 text-sm mb-2">Duration</label>
@@ -808,6 +872,12 @@ function CreateAuctionForm({
                     <span className="text-stone-400">Starting Bid</span>
                     <span className="text-amber-400">{Money.format(Money.parseToCents(startingBidDollars))}</span>
                   </div>
+                  {buyoutDollars && isBuyoutValid && (
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">Buyout Price</span>
+                      <span className="text-emerald-400">{Money.format(buyoutCents)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-stone-400">Duration</span>
                     <span className="text-white">{durationOptions.find(o => o.value === duration)?.label}</span>
@@ -854,6 +924,7 @@ function AuctionDetailView({
   playerCitizenid,
   playerFundsCents,
   onPlaceBid,
+  onBuyout,
   onCancel,
   onBack,
   categories
@@ -863,12 +934,14 @@ function AuctionDetailView({
   playerCitizenid: string;
   playerFundsCents: { cashCents: number; bankCents: number };
   onPlaceBid: (amountCents: number) => void;
+  onBuyout: () => void;
   onCancel: () => void;
   onBack: () => void;
   categories?: Category[];
 }) {
   const [bidAmountDollars, setBidAmountDollars] = useState<string>('');
   const [showConfirmCancel, setShowConfirmCancel] = useState(false);
+  const [showConfirmBuyout, setShowConfirmBuyout] = useState(false);
 
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
@@ -876,10 +949,12 @@ function AuctionDetailView({
   const totalFundsCents = playerFundsCents.cashCents + playerFundsCents.bankCents;
   const currentBidCents = auction.currentBidCents || 0;
   const startingBidCents = auction.startingBidCents || 0;
+  const buyoutPriceCents = auction.buyoutPriceCents || 0;
   const minBidCents = currentBidCents > 0 
     ? Math.ceil(currentBidCents * 1.05) 
     : startingBidCents;
   const canBid = !isOwnAuction && auction.status === 'active' && totalFundsCents >= minBidCents;
+  const canBuyout = !isOwnAuction && auction.status === 'active' && buyoutPriceCents > 0 && totalFundsCents >= buyoutPriceCents;
   const canCancel = isOwnAuction && auction.totalBids === 0 && auction.status === 'active';
 
   const handleBid = () => {
@@ -950,6 +1025,52 @@ function AuctionDetailView({
               <p className="text-stone-400 text-sm mb-3">
                 Highest bidder: <span className="text-white">{auction.highestBidder.name}</span>
               </p>
+            )}
+
+            {/* Buyout Section */}
+            {buyoutPriceCents > 0 && (
+              <div className="mb-4 p-3 bg-emerald-950/50 border border-emerald-800/50 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-emerald-400 text-sm font-medium">Buyout Price</span>
+                  <span className="text-emerald-300 text-lg font-bold">{Money.format(buyoutPriceCents)}</span>
+                </div>
+                {!isOwnAuction && (
+                  showConfirmBuyout ? (
+                    <div className="space-y-2">
+                      <p className="text-emerald-300 text-sm">Buy this item instantly for {Money.format(buyoutPriceCents)}?</p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={onBuyout}
+                          className="flex-1 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold"
+                        >
+                          Yes, Buy Now
+                        </button>
+                        <button
+                          onClick={() => setShowConfirmBuyout(false)}
+                          className="flex-1 py-2 bg-stone-800 hover:bg-stone-700 text-white rounded-lg text-sm"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setShowConfirmBuyout(true)}
+                      disabled={!canBuyout}
+                      className={`w-full py-2 rounded-lg font-semibold transition-colors ${
+                        canBuyout
+                          ? 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                          : 'bg-stone-800 text-stone-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {totalFundsCents < buyoutPriceCents ? 'Insufficient Funds' : 'Buy Now'}
+                    </button>
+                  )
+                )}
+                {isOwnAuction && (
+                  <p className="text-stone-500 text-xs text-center">You cannot buy your own auction</p>
+                )}
+              </div>
             )}
 
             {!isOwnAuction && (
@@ -1415,6 +1536,28 @@ export default function App() {
     }
   });
 
+  useNuiEvent('buyoutResult', (result: { success: boolean; error?: string; auction?: Auction }) => {
+    if (result.success) {
+      // Refresh to remove the purchased auction
+      handleSearch(searchQuery, pagination.page);
+      if (selectedAuctionId === result.auction?.id) {
+        setSelectedAuctionId(null);
+        setView('list');
+      }
+      addNotification({
+        type: 'success',
+        title: 'Purchase Complete!',
+        message: `You bought ${result.auction?.item?.label} for ${Money.format(result.auction?.buyoutPriceCents || 0)}!`
+      });
+    } else if (result.error) {
+      addNotification({
+        type: 'error',
+        title: 'Purchase Failed',
+        message: result.error
+      });
+    }
+  });
+
   useNuiEvent('cancelResult', (result: { success: boolean; error?: string }) => {
     if (!result.success && result.error) {
       addNotification({
@@ -1487,7 +1630,7 @@ export default function App() {
     fetchNui('close', {}, { success: true });
   }, []);
 
-  const handleCreateAuction = useCallback((data: { itemName: string; count: number; startingBid: number; duration: number; category: string }) => {
+  const handleCreateAuction = useCallback((data: { itemName: string; count: number; startingBid: number; duration: number; category: string; buyoutPrice?: number }) => {
     setIsSubmitting(true);
     fetchNui('createAuction', data, { success: true });
   }, []);
@@ -1498,6 +1641,10 @@ export default function App() {
 
   const handleCancelAuction = useCallback((auctionId: string) => {
     fetchNui('cancelAuction', { auctionId }, { success: true });
+  }, []);
+
+  const handleBuyoutAuction = useCallback((auctionId: string) => {
+    fetchNui('buyoutAuction', { auctionId }, { success: true });
   }, []);
 
   // Collection handlers
@@ -1577,6 +1724,10 @@ export default function App() {
           maxFee: 500,
           minFee: 5
         },
+        buyoutConfig: {
+          enabled: true,
+          minMultiplier: 1.5
+        },
         categories: [
           { id: 'weapons', label: 'Weapons', icon: '🔫', description: 'Firearms, melee weapons, and ammunition' },
           { id: 'ammunition', label: 'Ammunition', icon: '🎯', description: 'Bullets, arrows, and throwing weapons' },
@@ -1612,6 +1763,7 @@ export default function App() {
           category: 'weapons',
           startingBid: 500,
           currentBid: 0,
+          buyoutPriceCents: 1500,
           highestBidder: null,
           endTime: Math.floor(Date.now() / 1000) + 3600,
           createdAt: Math.floor(Date.now() / 1000) - 1800,
@@ -2016,6 +2168,7 @@ export default function App() {
               onClose={() => setView('list')}
               isSubmitting={isSubmitting}
               feeConfig={playerData.feeConfig}
+              buyoutConfig={playerData.buyoutConfig}
               playerFundsCents={playerData.cashCents + playerData.bankCents}
               categories={playerData.categories}
             />
@@ -2028,6 +2181,7 @@ export default function App() {
               playerCitizenid={playerData.citizenid}
               playerFundsCents={{ cashCents: playerData.cashCents, bankCents: playerData.bankCents }}
               onPlaceBid={(amountCents) => handlePlaceBid(selectedAuction.id, amountCents)}
+              onBuyout={() => handleBuyoutAuction(selectedAuction.id)}
               onCancel={() => handleCancelAuction(selectedAuction.id)}
               onBack={() => { setView('list'); setSelectedAuctionId(null); }}
               categories={playerData.categories}

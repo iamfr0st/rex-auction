@@ -10,16 +10,18 @@ local WebhookConfig = {
         auctionCreated = nil,
         bidPlaced = nil,
         auctionWon = nil,
+        auctionBuyout = nil,
         auctionExpired = nil,
         auctionCancelled = nil,
         highValueSale = nil,  -- Optional: for high-value transactions
     },
-    
+
     -- Event toggles
     enabled = {
         auctionCreated = true,
         bidPlaced = false,    -- Off by default (can be spammy)
         auctionWon = true,
+        auctionBuyout = true,
         auctionExpired = true,
         auctionCancelled = true,
         highValueSale = true,
@@ -51,6 +53,30 @@ local function getWebhookUrl(eventType)
     end
     -- Fall back to default URL
     return WebhookConfig.defaultUrl
+end
+
+-- Validate webhook URL to prevent SSRF
+local function isValidWebhookUrl(url)
+    if not url or type(url) ~= "string" then
+        return false, "URL must be a string"
+    end
+    
+    -- Must be HTTPS
+    if not url:match("^https://") then
+        return false, "URL must use HTTPS"
+    end
+    
+    -- Must be discord.com domain
+    if not url:match("^https://discord%.com/api/webhooks/") then
+        return false, "URL must be a valid Discord webhook URL"
+    end
+    
+    -- Length check
+    if #url > 500 then
+        return false, "URL too long"
+    end
+    
+    return true
 end
 
 local function isWebhookEnabled(eventType)
@@ -117,6 +143,22 @@ function EmbedBuilders.auctionWon(data)
             { name = 'Total Bids', value = tostring(data.totalBids or 0), inline = true },
         },
         footer = { text = 'Auction House', icon_url = WebhookConfig.botAvatar },
+        timestamp = formatTimestamp(),
+    }
+end
+
+function EmbedBuilders.auctionBuyout(data)
+    return {
+        title = 'Item Purchased via Buyout!',
+        color = 5763719,  -- Purple
+        fields = {
+            { name = 'Item', value = string.format('%s x%d', data.itemLabel or data.itemName, data.count or 1), inline = true },
+            { name = 'Buyout Price', value = formatMoney(data.buyoutPriceCents and (data.buyoutPriceCents / 100) or data.buyoutPrice), inline = true },
+            { name = 'Buyer', value = data.buyerName or 'Unknown', inline = true },
+            { name = 'Seller', value = data.sellerName or 'Unknown', inline = true },
+            { name = 'Auction ID', value = data.auctionId or 'N/A', inline = true },
+        },
+        footer = { text = 'Auction House - Buyout', icon_url = WebhookConfig.botAvatar },
         timestamp = formatTimestamp(),
     }
 end
@@ -242,9 +284,16 @@ function SendWebhook(eventType, data)
     
     -- Send webhook
     sendWebhookRequest(url, payload)
-    
-    -- Check for high value sale
-    if eventType == 'auctionWon' and data.finalPrice and data.finalPrice >= WebhookConfig.highValueThreshold then
+
+    -- Check for high value sale (auctionWon or auctionBuyout)
+    local finalPrice = nil
+    if eventType == 'auctionWon' then
+        finalPrice = data.finalPrice
+    elseif eventType == 'auctionBuyout' then
+        finalPrice = data.buyoutPriceCents and (data.buyoutPriceCents / 100) or data.buyoutPrice
+    end
+
+    if finalPrice and finalPrice >= WebhookConfig.highValueThreshold then
         if isWebhookEnabled('highValueSale') then
             local highValueUrl = getWebhookUrl('highValueSale')
             if highValueUrl then
@@ -262,6 +311,12 @@ end
 
 -- Configure webhook URL at runtime
 function SetWebhookUrl(eventType, url)
+    -- Validate URL
+    local valid, err = isValidWebhookUrl(url)
+    if not valid then
+        return false, err or 'Invalid webhook URL'
+    end
+    
     if eventType == 'default' then
         WebhookConfig.defaultUrl = url
     elseif WebhookConfig.urls[eventType] then
