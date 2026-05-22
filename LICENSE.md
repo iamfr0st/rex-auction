@@ -6,4 +6,4 @@ CC BY-NC-SA 4.0 is a Creative Commons license that allows others to copy, distri
 * CC NC: NonCommercial. You may not use the material for commercial purposes. 
 * CC SA: ShareAlike. If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original.
 
-<a href="https://github.com/RexShackGaming">RexShackGaming</a> © 2025 by <a href="https://github.com/RexShack">RexShack</a> is licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>
+<a href="https://github.com/RexShackGaming">RexShackGaming</a> © 2026 by <a href="https://github.com/RexShack">RexShack</a> is licensed under <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>
