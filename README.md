@@ -604,4 +604,9 @@ For issues or feature requests, contact the resource developer or submit an issu
 
 ## License
 
-This resource is provided as-is for use with RSG Framework on RedM servers.
+This project is licensed under the terms specified in the LICENSE file.
+
+---
+
+**Author:** RexShack  
+**Support Me:** [Buy me a Beer](https://buymeacoffee.com/rexshack)
