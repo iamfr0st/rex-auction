@@ -384,6 +384,190 @@ function getCategoryInfo(categoryId: string | undefined, categories: Category[] 
   return categories.find(c => c.id === categoryId);
 }
 
+function isHorseAuctionEntry(item: InventoryItem | null | undefined): boolean {
+  if (!item) return false;
+  return item?.metadata?.auctionType === 'horse'
+    || item?.metadata?.auctionCategory === 'horses'
+    || typeof item?.metadata?.horseId !== 'undefined'
+    || typeof item?.metadata?.horseModel !== 'undefined'
+    || String(item.name || '').startsWith('horse_');
+}
+
+function isHorseAuction(auction: Auction | null | undefined): boolean {
+  if (!auction) return false;
+  return auction?.item?.metadata?.auctionType === 'horse'
+    || auction?.item?.metadata?.auctionCategory === 'horses'
+    || typeof auction?.item?.metadata?.horseId !== 'undefined'
+    || typeof auction?.item?.metadata?.horseModel !== 'undefined'
+    || String(auction?.item?.name || '').startsWith('horse_')
+    || auction?.category === 'horses';
+}
+
+function formatHorseModelName(model: string | undefined): string {
+  if (!model) return 'Unknown Breed';
+  const normalized = model.replace(/^a_c_horse_/i, '').replace(/^a_c_/i, '').replace(/_/g, ' ').trim();
+  return normalized
+    .split(' ')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+const horseCoatLabels: Record<string, string> = {
+  a_c_horse_arabian_white: 'White',
+  a_c_horse_arabian_redchestnut_pc: 'Red Chestnut',
+  a_c_horse_arabian_warpedbrindle_pc: 'Warped Brindle',
+  a_c_horse_andalusian_perlino: 'Perlino',
+  a_c_horse_mustang_tigerstripedbay: 'Tiger Striped Bay',
+  a_c_horse_shire_ravenblack: 'Raven Black',
+  a_c_horse_kladruber_black: 'Black',
+  a_c_horse_appaloosa_fewspotted_pc: 'Few Spotted',
+  a_c_horse_mustang_goldendun: 'Golden Dun',
+  a_c_horse_nokota_whiteroan: 'White Roan',
+  a_c_horse_missourifoxtrotter_silverdapplepinto: 'Silver Dapple Pinto',
+};
+
+const horseHandlingByModel: Record<string, string> = {
+  a_c_horse_arabian_white: 'Elite',
+  a_c_horse_arabian_redchestnut_pc: 'Elite',
+  a_c_horse_arabian_warpedbrindle_pc: 'Elite',
+  a_c_horse_andalusian_perlino: 'Standard',
+  a_c_horse_mustang_tigerstripedbay: 'Standard',
+  a_c_horse_shire_ravenblack: 'Heavy',
+  a_c_horse_kladruber_black: 'Standard',
+  a_c_horse_appaloosa_fewspotted_pc: 'Standard',
+  a_c_horse_mustang_goldendun: 'Standard',
+  a_c_horse_nokota_whiteroan: 'Race',
+  a_c_horse_missourifoxtrotter_silverdapplepinto: 'Standard',
+};
+
+function getHorseCoatLabel(model: string | undefined): string {
+  if (!model) return 'Unknown';
+  return horseCoatLabels[String(model).toLowerCase()] || 'Unknown';
+}
+
+function getHorseHandlingFromModel(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  return horseHandlingByModel[String(model).toLowerCase()];
+}
+
+function getHorseLevel(xp: number): number {
+  if (xp >= 4000) return 10;
+  if (xp >= 3000) return 9;
+  if (xp >= 2000) return 8;
+  if (xp >= 1000) return 7;
+  if (xp >= 500) return 6;
+  if (xp >= 400) return 5;
+  if (xp >= 300) return 4;
+  if (xp >= 200) return 3;
+  if (xp >= 100) return 2;
+  return 1;
+}
+
+function getHorseBondingLevel(xp: number): number {
+  if (xp > 3750) return 4;
+  if (xp > 2500) return 3;
+  if (xp > 1250) return 2;
+  return 1;
+}
+
+function getHorseHandlingLabel(level: number): string {
+  if (level >= 7) return 'Elite';
+  if (level >= 5) return 'Race';
+  if (level >= 3) return 'Standard';
+  return 'Heavy';
+}
+
+function normalizeHorseHandlingLabel(
+  handling: string | undefined,
+  fallbackLevel: number,
+  model?: string | undefined,
+): string {
+  if (fallbackLevel >= 7) return 'Elite';
+  if (fallbackLevel >= 5) return 'Race';
+  if (fallbackLevel >= 3) return 'Standard';
+
+  const value = String(handling || '').toUpperCase();
+
+  if (value === 'HORSE_HANDLING_ELITE' || value === 'ELITE') return 'Elite';
+  if (value === 'HORSE_HANDLING_RACE' || value === 'RACE') return 'Race';
+  if (value === 'HORSE_HANDLING_STANDARD' || value === 'STANDARD') return 'Standard';
+  if (value === 'HORSE_HANDLING_HEAVY' || value === 'HEAVY') return 'Heavy';
+
+  const modelHandling = getHorseHandlingFromModel(model);
+  if (modelHandling) return modelHandling;
+
+  return getHorseHandlingLabel(fallbackLevel);
+}
+
+function getHorseAgeDays(born: number): number | null {
+  if (!born || born <= 0) return null;
+  return Math.max(0, Math.floor((Date.now() / 1000 - born) / 86400));
+}
+
+function getHorseAuctionDetails(auction: Auction) {
+  const metadata = auction.item.metadata || {};
+  const xp = Number(metadata.horseXp || 0);
+  const level = getHorseLevel(xp);
+  const bond = getHorseBondingLevel(xp);
+  const ageDays = getHorseAgeDays(Number(metadata.horseBorn || 0));
+
+  return {
+    breed: formatHorseModelName(metadata.horseModel),
+    coat: getHorseCoatLabel(metadata.horseModel),
+    gender: metadata.horseGender || 'Unknown',
+    stable: metadata.horseStable || 'Unknown',
+    horseId: metadata.horseId || 'Unknown',
+    xp,
+    level,
+    bond,
+    ageDays,
+    speed: Number(metadata.horseSpeedValue ?? level),
+    acceleration: Number(metadata.horseAccValue ?? level),
+    handling: normalizeHorseHandlingLabel(metadata.horseHandling, level, metadata.horseModel),
+  };
+}
+
+function HorseStatBar({ value }: { value: number }) {
+  return (
+    <div className="flex gap-1">
+      {Array.from({ length: 10 }, (_, index) => (
+        <span
+          key={index}
+          className={`h-2 w-3 rounded-sm ${index < Math.max(0, Math.min(10, value)) ? 'bg-amber-500' : 'bg-stone-700'}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function getHorseHandlingBadgeLabel(handling: string): string {
+  const normalized = String(handling || '').toLowerCase();
+  if (normalized === 'elite') return 'E';
+  if (normalized === 'race') return 'R';
+  if (normalized === 'standard') return 'S';
+  return 'H';
+}
+
+function HorseStatBadge({
+  label,
+  value,
+  accentClass = 'text-amber-300',
+}: {
+  label: string;
+  value: string;
+  accentClass?: string;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full border border-amber-700/50 bg-stone-900/90 shadow-inner shadow-black/30">
+        <span className={`text-sm font-semibold ${accentClass}`}>{value}</span>
+      </div>
+      <span className="text-[10px] uppercase tracking-[0.2em] text-stone-500">{label}</span>
+    </div>
+  );
+}
+
 // Auction Card Component
 function AuctionCard({ 
   auction, 
@@ -401,6 +585,7 @@ function AuctionCard({
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
   const categoryInfo = getCategoryInfo(auction.category, categories);
+  const isHorse = isHorseAuction(auction);
 
   return (
     <div 
@@ -433,6 +618,13 @@ function AuctionCard({
           )}
         </div>
       </div>
+
+      <AsyncImage 
+        imageMeta={auction.item.imageMeta}
+        alt={auction.item.label}
+        className="w-full h-36 rounded-lg mb-3"
+        fallbackIcon={isHorse ? '🐎' : '📦'}
+      />
 
       <div className="flex justify-between items-center text-sm">
         <div>
@@ -479,6 +671,7 @@ function AuctionListRow({
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
   const categoryInfo = getCategoryInfo(auction.category, categories);
+  const isHorse = isHorseAuction(auction);
 
   return (
     <div 
@@ -494,6 +687,7 @@ function AuctionListRow({
         imageMeta={auction.item.imageMeta}
         alt={auction.item.label}
         className="w-12 h-12 rounded-lg flex-shrink-0"
+        fallbackIcon={isHorse ? '🐎' : '📦'}
       />
       
       {/* Item Info */}
@@ -551,7 +745,7 @@ function CreateAuctionForm({
   categories
 }: {
   inventory: InventoryItem[];
-  onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number; category: string; buyoutPrice?: number }) => void;
+  onCreate: (data: { itemName: string; count: number; startingBid: number; duration: number; category: string; buyoutPrice?: number; customImageUrl?: string }) => void;
   onClose: () => void;
   isSubmitting: boolean;
   feeConfig?: FeeConfig;
@@ -566,6 +760,7 @@ function CreateAuctionForm({
   const [buyoutDollars, setBuyoutDollars] = useState<string>('');
   const [duration, setDuration] = useState(3600);
   const [searchQuery, setSearchQuery] = useState('');
+  const [customHorseImageUrl, setCustomHorseImageUrl] = useState('');
 
   const filteredInventory = useMemo(() => {
     let items = inventory;
@@ -613,6 +808,7 @@ function CreateAuctionForm({
 
   const canAffordFee = playerFundsCents >= localFeePreview.totalCents;
   const selectedCategoryLabel = categories?.find(c => c.id === selectedCategory)?.label || '';
+  const isHorseListing = isHorseAuctionEntry(selectedItem);
 
   // Calculate buyout validation
   const startingBidCents = Money.parseToCents(startingBidDollars);
@@ -628,11 +824,12 @@ function CreateAuctionForm({
     if (buyoutDollars && !isBuyoutValid) return;
     onCreate({
       itemName: selectedItem.name,
-      count,
+      count: isHorseListing ? 1 : count,
       startingBid: startingBidCents,
       duration,
       category: selectedCategory,
-      buyoutPrice: buyoutDollars ? buyoutCents : undefined
+      buyoutPrice: buyoutDollars ? buyoutCents : undefined,
+      customImageUrl: isHorseListing ? customHorseImageUrl.trim() || undefined : undefined
     });
   };
 
@@ -679,6 +876,10 @@ function CreateAuctionForm({
                     onClick={() => {
                       setSelectedItem(item);
                       setCount(1);
+                      setCustomHorseImageUrl('');
+                      if (isHorseAuctionEntry(item)) {
+                        setSelectedCategory('horses');
+                      }
                     }}
                     className={`flex justify-between items-center p-3 cursor-pointer transition-colors ${
                       selectedItem?.name === item.name
@@ -691,6 +892,7 @@ function CreateAuctionForm({
                         imageMeta={item.imageMeta}
                         alt={item.label}
                         className="w-8 h-8 rounded"
+                        fallbackIcon={isHorseAuctionEntry(item) ? '🐎' : '📦'}
                       />
                       <div>
                         <p className="text-white text-sm">{item.label}</p>
@@ -707,35 +909,54 @@ function CreateAuctionForm({
           {selectedItem && (
             <>
               {/* Quantity */}
-              <div>
-                <label className="block text-stone-300 text-sm mb-2">Quantity</label>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setCount(Math.max(1, count - 1))}
-                    className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
-                  >-</button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={selectedItem.count}
-                    value={count}
-                    onChange={(e) => setCount(Math.min(selectedItem.count, Math.max(1, parseInt(e.target.value) || 1)))}
-                    className="flex-1 bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white text-center focus:outline-none focus:border-amber-600"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setCount(Math.min(selectedItem.count, count + 1))}
-                    className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
-                  >+</button>
-                  <button
-                    type="button"
-                    onClick={() => setCount(selectedItem.count)}
-                    className="px-3 h-10 bg-stone-800 border border-stone-700 rounded-lg text-stone-300 text-sm hover:bg-stone-700"
-                  >Max</button>
+              {isHorseListing ? (
+                <div className="rounded-lg border border-amber-700/40 bg-amber-950/20 p-4">
+                  <p className="text-amber-300 text-sm font-medium">Horse Listing</p>
+                  <p className="text-stone-400 text-xs mt-1">
+                    Bring your active owned horse close to the auctioneer to list it here.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <p className="text-stone-500">Horse ID</p>
+                      <p className="text-white">{selectedItem.metadata.horseId || 'Unknown'}</p>
+                    </div>
+                    <div>
+                      <p className="text-stone-500">Model</p>
+                      <p className="text-white break-all">{selectedItem.metadata.horseModel || 'Unknown'}</p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-stone-500 text-xs mt-1">Available: {selectedItem.count}</p>
-              </div>
+              ) : (
+                <div>
+                  <label className="block text-stone-300 text-sm mb-2">Quantity</label>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setCount(Math.max(1, count - 1))}
+                      className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
+                    >-</button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={selectedItem.count}
+                      value={count}
+                      onChange={(e) => setCount(Math.min(selectedItem.count, Math.max(1, parseInt(e.target.value) || 1)))}
+                      className="flex-1 bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white text-center focus:outline-none focus:border-amber-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCount(Math.min(selectedItem.count, count + 1))}
+                      className="w-10 h-10 bg-stone-800 border border-stone-700 rounded-lg text-white hover:bg-stone-700"
+                    >+</button>
+                    <button
+                      type="button"
+                      onClick={() => setCount(selectedItem.count)}
+                      className="px-3 h-10 bg-stone-800 border border-stone-700 rounded-lg text-stone-300 text-sm hover:bg-stone-700"
+                    >Max</button>
+                  </div>
+                  <p className="text-stone-500 text-xs mt-1">Available: {selectedItem.count}</p>
+                </div>
+              )}
 
               {/* Starting Bid */}
               <div>
@@ -803,6 +1024,7 @@ function CreateAuctionForm({
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
+                  disabled={isHorseListing}
                   className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
                 >
                   <option value="">Select a category...</option>
@@ -811,6 +1033,22 @@ function CreateAuctionForm({
                   ))}
                 </select>
               </div>
+
+              {isHorseListing && (
+                <div>
+                  <label className="block text-stone-300 text-sm mb-2">Custom Horse Image (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="https://cdn.discordapp.com/..."
+                    value={customHorseImageUrl}
+                    onChange={(e) => setCustomHorseImageUrl(e.target.value)}
+                    className="w-full bg-stone-800 border border-stone-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-600"
+                  />
+                  <p className="text-stone-500 text-xs mt-1">
+                    Discord-hosted image URLs only.
+                  </p>
+                </div>
+              )}
 
               {/* Fee Breakdown */}
               {localFeePreview.enabled && (
@@ -860,7 +1098,7 @@ function CreateAuctionForm({
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-stone-400">Item</span>
-                    <span className="text-white">{selectedItem.label} x{count}</span>
+                    <span className="text-white">{selectedItem.label} x{isHorseListing ? 1 : count}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-stone-400">Category</span>
@@ -946,6 +1184,7 @@ function AuctionDetailView({
   const isOwnAuction = auction.owner.citizenid === playerCitizenid;
   const isHighestBidder = auction.highestBidder?.citizenid === playerCitizenid;
   const categoryInfo = getCategoryInfo(auction.category, categories);
+  const horseDetails = isHorseAuction(auction) ? getHorseAuctionDetails(auction) : null;
   const totalFundsCents = playerFundsCents.cashCents + playerFundsCents.bankCents;
   const currentBidCents = auction.currentBidCents || 0;
   const startingBidCents = auction.startingBidCents || 0;
@@ -991,6 +1230,7 @@ function AuctionDetailView({
               imageMeta={auction.item.imageMeta}
               alt={auction.item.label}
               className="w-24 h-24 bg-stone-800 rounded-lg border border-stone-700"
+              fallbackIcon={horseDetails ? '🐎' : '📦'}
             />
             <div className="flex-1">
               <p className="text-white font-medium">{auction.item.label}</p>
@@ -1004,6 +1244,92 @@ function AuctionDetailView({
             </div>
           </div>
         </div>
+
+        {horseDetails && (
+          <div className="px-4 pb-4 border-b border-stone-700/50">
+            <div className="rounded-xl border border-amber-800/40 bg-gradient-to-r from-amber-950/40 to-stone-900 p-4">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-amber-200 text-sm font-semibold uppercase tracking-wide">Horse Details</h3>
+                  <p className="text-stone-500 text-xs mt-1">Saved horse data attached to this listing</p>
+                </div>
+                <span className="px-2 py-1 text-xs rounded-md bg-stone-800 text-stone-300">
+                  Bonding {horseDetails.bond}/4
+                </span>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                <div className="rounded-xl border border-stone-800 bg-stone-950/70 p-3">
+                  <AsyncImage
+                    imageMeta={auction.item.imageMeta}
+                    alt={auction.item.label}
+                    className="w-full h-56 rounded-lg object-contain bg-stone-900"
+                    fallbackIcon="🐎"
+                  />
+                  <div className="mt-4 flex items-center justify-center gap-3">
+                    <HorseStatBadge label="Speed" value={`${horseDetails.speed}`} />
+                    <HorseStatBadge label="Accel" value={`${horseDetails.acceleration}`} />
+                    <HorseStatBadge label="Handling" value={getHorseHandlingBadgeLabel(horseDetails.handling)} accentClass="text-stone-100" />
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-500 text-xs uppercase tracking-wide mb-1">Breed</p>
+                      <p className="text-white">{horseDetails.breed}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-500 text-xs uppercase tracking-wide mb-1">Coat</p>
+                      <p className="text-white">{horseDetails.coat}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-500 text-xs uppercase tracking-wide mb-1">Gender</p>
+                      <p className="text-white">{horseDetails.gender}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-500 text-xs uppercase tracking-wide mb-1">Horse ID</p>
+                      <p className="text-white">{horseDetails.horseId}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-500 text-xs uppercase tracking-wide mb-1">Stable</p>
+                      <p className="text-white">{horseDetails.stable}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-500 text-xs uppercase tracking-wide mb-1">Training</p>
+                      <p className="text-white">Level {horseDetails.level} • {horseDetails.xp.toLocaleString()} XP</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-stone-400 text-xs uppercase tracking-wide">Speed</span>
+                        <span className="text-amber-300 text-xs font-medium">{horseDetails.speed}/10</span>
+                      </div>
+                      <HorseStatBar value={horseDetails.speed} />
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-stone-400 text-xs uppercase tracking-wide">Acceleration</span>
+                        <span className="text-amber-300 text-xs font-medium">{horseDetails.acceleration}/10</span>
+                      </div>
+                      <HorseStatBar value={horseDetails.acceleration} />
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-400 text-xs uppercase tracking-wide mb-1">Handling</p>
+                      <p className="text-white">{horseDetails.handling}</p>
+                    </div>
+                    <div className="rounded-lg bg-stone-900/60 border border-stone-800 p-3">
+                      <p className="text-stone-400 text-xs uppercase tracking-wide mb-1">Age</p>
+                      <p className="text-white">{horseDetails.ageDays === null ? 'Unknown' : `${horseDetails.ageDays} day${horseDetails.ageDays === 1 ? '' : 's'}`}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Bidding Section */}
         {auction.status === 'active' && (
@@ -1453,21 +1779,21 @@ export default function App() {
     });
   });
 
-  useNuiEvent('bidPlaced', (data: { auctionId: string; currentBid: number; highestBidder: Player; totalBids: number; bidHistory: BidEntry[] }) => {
+  useNuiEvent('bidPlaced', (data: { auctionId: string; currentBidCents: number; highestBidder: Player; totalBids: number; bidHistory: BidEntry[] }) => {
     setAuctions(prev => prev.map(a => 
       a.id === data.auctionId 
-        ? { ...a, currentBid: data.currentBid, highestBidder: data.highestBidder, totalBids: data.totalBids }
+        ? { ...a, currentBidCents: data.currentBidCents, highestBidder: data.highestBidder, totalBids: data.totalBids }
         : a
     ));
     setBidHistory(prev => ({ ...prev, [data.auctionId]: data.bidHistory }));
     addNotification({
       type: 'success',
       title: 'Bid Placed',
-      message: `Your bid of $${data.currentBid.toLocaleString()} is now the highest!`
+      message: `Your bid of ${Money.format(data.currentBidCents)} is now the highest!`
     });
   });
 
-  useNuiEvent('auctionEnded', (data: { auctionId: string; winner?: Player; soldFor?: number }) => {
+  useNuiEvent('auctionEnded', (data: { auctionId: string; winner?: Player; soldForCents?: number }) => {
     // Refresh search results to remove ended auction
     handleSearch(searchQuery, pagination.page);
     if (selectedAuctionId === data.auctionId) {
@@ -1490,7 +1816,7 @@ export default function App() {
     });
   });
 
-  useNuiEvent('notification', (data: { type: string; auctionId: string; itemName: string; count?: number; amount?: number; newHighBid?: number }) => {
+  useNuiEvent('notification', (data: { type: string; auctionId: string; itemName: string; count?: number; amountCents?: number; newHighBidCents?: number }) => {
     const titles: Record<string, string> = {
       outbid: 'Outbid!',
       won: 'Auction Won!',
@@ -1500,10 +1826,10 @@ export default function App() {
     };
 
     const messages: Record<string, string> = {
-      outbid: `You were outbid on ${data.itemName}. New bid: $${data.newHighBid?.toLocaleString()}`,
-      won: `You won ${data.itemName}${data.count ? ` x${data.count}` : ''} for $${data.amount?.toLocaleString()}!`,
+      outbid: `You were outbid on ${data.itemName}. New bid: ${Money.format(data.newHighBidCents)}`,
+      won: `You won ${data.itemName}${data.count ? ` x${data.count}` : ''} for ${Money.format(data.amountCents)}!`,
       lost: `You lost the auction for ${data.itemName}`,
-      sold: `Your ${data.itemName}${data.count ? ` x${data.count}` : ''} sold for $${data.amount?.toLocaleString()}!`,
+      sold: `Your ${data.itemName}${data.count ? ` x${data.count}` : ''} sold for ${Money.format(data.amountCents)}!`,
       expired: `Your ${data.itemName} auction expired. Item returned.`
     };
 
@@ -1574,7 +1900,7 @@ export default function App() {
 
   // Balance update handler - receives real-time balance changes from server
   useNuiEvent('balanceUpdated', (data: { cash: number; bank: number }) => {
-    setPlayerData(prev => ({ ...prev, cash: data.cash, bank: data.bank }));
+    setPlayerData(prev => ({ ...prev, cashCents: data.cash, bankCents: data.bank }));
   });
 
   useNuiEvent('feePreview', (data: FeePreview) => {
@@ -1587,14 +1913,14 @@ export default function App() {
     setPendingCollections(data);
   });
 
-  useNuiEvent('collectionResult', (result: { success: boolean; error?: string; type: 'item' | 'money'; itemName?: string; itemLabel?: string; count?: number; amount?: number }) => {
+  useNuiEvent('collectionResult', (result: { success: boolean; error?: string; type: 'item' | 'money'; auctionId?: string; itemName?: string; itemLabel?: string; count?: number; amountCents?: number }) => {
     if (result.success) {
       if (result.type === 'item') {
         setCollectingItem(null);
         // Remove collected item from pending
         setPendingCollections(prev => ({
           ...prev,
-          items: prev.items.filter(item => item.auctionId !== result.itemName)
+          items: prev.items.filter(item => item.auctionId !== result.auctionId)
         }));
         addNotification({
           type: 'success',
@@ -1609,7 +1935,7 @@ export default function App() {
         addNotification({
           type: 'success',
           title: 'Money Collected',
-          message: `Collected $${result.amount?.toLocaleString()}`
+          message: `Collected ${Money.format(result.amountCents)}`
         });
         fetchNui('getPendingCollections', {}, { money: null, items: [] });
       }
@@ -1630,7 +1956,7 @@ export default function App() {
     fetchNui('close', {}, { success: true });
   }, []);
 
-  const handleCreateAuction = useCallback((data: { itemName: string; count: number; startingBid: number; duration: number; category: string; buyoutPrice?: number }) => {
+  const handleCreateAuction = useCallback((data: { itemName: string; count: number; startingBid: number; duration: number; category: string; buyoutPrice?: number; customImageUrl?: string }) => {
     setIsSubmitting(true);
     fetchNui('createAuction', data, { success: true });
   }, []);
@@ -1712,8 +2038,8 @@ export default function App() {
           { name: 'arrow_improved', label: 'Improved Arrows', count: 24, slot: 4, metadata: {} },
           { name: 'pelt_bear', label: 'Bear Pelt', count: 1, slot: 5, metadata: { quality: 'perfect' } },
         ],
-        cash: 500,
-        bank: 2500,
+        cashCents: 50000,
+        bankCents: 250000,
         citizenid: 'player1',
         playerName: 'Test Player',
         feeConfig: {
@@ -1735,6 +2061,7 @@ export default function App() {
           { id: 'food', label: 'Food & Drink', icon: '🥩', description: 'Consumables, provisions, and beverages' },
           { id: 'resources', label: 'Resources', icon: '🪨', description: 'Ores, minerals, and raw materials' },
           { id: 'pelts', label: 'Pelts & Hides', icon: '🦌', description: 'Animal pelts, hides, and taxidermy' },
+          { id: 'horses', label: 'Horses', icon: '🐎', description: 'Owned horses listed from nearby active mounts' },
           { id: 'medicine', label: 'Medicine', icon: '💊', description: 'Tonics, medicines, and healing items' },
           { id: 'tools', label: 'Tools', icon: '🔧', description: 'Tools, kits, and crafting supplies' },
           { id: 'valuables', label: 'Valuables', icon: '💎', description: 'Jewelry, gold, and valuable items' },
@@ -1748,8 +2075,8 @@ export default function App() {
           owner: { id: 2, name: 'John Marston', citizenid: 'citizen2' },
           item: { name: 'gold_nugget', label: 'Gold Nugget', count: 10, metadata: {} },
           category: 'valuables',
-          startingBid: 100,
-          currentBid: 250,
+          startingBidCents: 100,
+          currentBidCents: 250,
           highestBidder: { id: 3, name: 'Arthur Morgan', citizenid: 'citizen3' },
           endTime: Math.floor(Date.now() / 1000) + 1800,
           createdAt: Math.floor(Date.now() / 1000) - 3600,
@@ -1761,8 +2088,8 @@ export default function App() {
           owner: { id: 4, name: 'Dutch van der Linde', citizenid: 'citizen4' },
           item: { name: 'revolver_schofield', label: 'Schofield Revolver', count: 1, metadata: { condition: 90 } },
           category: 'weapons',
-          startingBid: 500,
-          currentBid: 0,
+          startingBidCents: 500,
+          currentBidCents: 0,
           buyoutPriceCents: 1500,
           highestBidder: null,
           endTime: Math.floor(Date.now() / 1000) + 3600,
@@ -1775,8 +2102,8 @@ export default function App() {
           owner: { id: 5, name: 'Sadie Adler', citizenid: 'citizen5' },
           item: { name: 'pelt_bear', label: 'Perfect Bear Pelt', count: 1, metadata: { quality: 'perfect' } },
           category: 'pelts',
-          startingBid: 200,
-          currentBid: 350,
+          startingBidCents: 200,
+          currentBidCents: 350,
           highestBidder: { id: 1, name: 'Test Player', citizenid: 'player1' },
           endTime: Math.floor(Date.now() / 1000) + 120,
           createdAt: Math.floor(Date.now() / 1000) - 7200,
@@ -1787,21 +2114,21 @@ export default function App() {
 
       setBidHistory({
         'AUC_1': [
-          { playerId: 3, playerName: 'Arthur Morgan', citizenid: 'citizen3', amount: 250, timestamp: Math.floor(Date.now() / 1000) - 300 },
-          { playerId: 6, playerName: 'Charles Smith', citizenid: 'citizen6', amount: 200, timestamp: Math.floor(Date.now() / 1000) - 900 },
-          { playerId: 3, playerName: 'Arthur Morgan', citizenid: 'citizen3', amount: 150, timestamp: Math.floor(Date.now() / 1000) - 1500 },
-          { playerId: 7, playerName: 'Javier Escuella', citizenid: 'citizen7', amount: 100, timestamp: Math.floor(Date.now() / 1000) - 2100 },
+          { playerId: 3, playerName: 'Arthur Morgan', citizenid: 'citizen3', amountCents: 250, timestamp: Math.floor(Date.now() / 1000) - 300 },
+          { playerId: 6, playerName: 'Charles Smith', citizenid: 'citizen6', amountCents: 200, timestamp: Math.floor(Date.now() / 1000) - 900 },
+          { playerId: 3, playerName: 'Arthur Morgan', citizenid: 'citizen3', amountCents: 150, timestamp: Math.floor(Date.now() / 1000) - 1500 },
+          { playerId: 7, playerName: 'Javier Escuella', citizenid: 'citizen7', amountCents: 100, timestamp: Math.floor(Date.now() / 1000) - 2100 },
         ],
         'AUC_3': [
-          { playerId: 1, playerName: 'Test Player', citizenid: 'player1', amount: 350, timestamp: Math.floor(Date.now() / 1000) - 600 },
-          { playerId: 8, playerName: 'Hosea Matthews', citizenid: 'citizen8', amount: 200, timestamp: Math.floor(Date.now() / 1000) - 1200 },
+          { playerId: 1, playerName: 'Test Player', citizenid: 'player1', amountCents: 350, timestamp: Math.floor(Date.now() / 1000) - 600 },
+          { playerId: 8, playerName: 'Hosea Matthews', citizenid: 'citizen8', amountCents: 200, timestamp: Math.floor(Date.now() / 1000) - 1200 },
         ]
       });
 
       // Mock pending collections
       setPendingCollections({
         money: {
-          amount: 1250,
+          amountCents: 1250,
           reason: 'Auction sale',
           auctionId: 'AUC_4',
           itemName: 'Schofield Revolver'
@@ -1819,7 +2146,7 @@ export default function App() {
               itemName: 'pelt_bear',
               fallbackUrl: 'nui://rex-auction/web/dist/fallback.svg'
             },
-            soldFor: 350,
+            soldForCents: 350,
             sellerName: 'Sadie Adler'
           },
           {
@@ -1834,7 +2161,7 @@ export default function App() {
               itemName: 'gold_nugget',
               fallbackUrl: 'nui://rex-auction/web/dist/fallback.svg'
             },
-            soldFor: 500,
+            soldForCents: 500,
             sellerName: 'Dutch van der Linde'
           }
         ]

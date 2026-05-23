@@ -61,6 +61,47 @@ local function removeTargetFromEntity(entity)
     exports.ox_target:removeLocalEntity(entity, TARGET_OPTION_NAME)
 end
 
+local function findExistingNPC(npcConfig)
+    local coords = npcConfig.coords
+    local modelHash = GetHashKey(npcConfig.model)
+
+    for _, ped in ipairs(GetGamePool('CPed')) do
+        if DoesEntityExist(ped) and GetEntityModel(ped) == modelHash then
+            local pedCoords = GetEntityCoords(ped)
+            if #(pedCoords - coords) <= 3.0 then
+                return ped
+            end
+        end
+    end
+
+    return nil
+end
+
+local function cleanupExistingNPCs()
+    if not Config.AuctioneerNPCs then return end
+
+    for index, npcConfig in ipairs(Config.AuctioneerNPCs) do
+        while true do
+            local ped = findExistingNPC(npcConfig)
+            if not ped then
+                break
+            end
+
+            removeTargetFromEntity(ped)
+            SetEntityAsMissionEntity(ped, true, true)
+            DeletePed(ped)
+
+            if Config.Debug then
+                print(('[Auction NPC] Cleaned up existing %s before spawn (index %d, entity: %d)'):format(
+                    npcConfig.name or 'NPC', index, ped
+                ))
+            end
+
+            Wait(0)
+        end
+    end
+end
+
 local function spawnNPC(npcConfig, index)
     -- Validate npcConfig
     if not npcConfig or type(npcConfig) ~= "table" then
@@ -70,6 +111,25 @@ local function spawnNPC(npcConfig, index)
     
     if SpawnedNPCs[index] and DoesEntityExist(SpawnedNPCs[index].entity) then
         return SpawnedNPCs[index].entity
+    end
+
+    local existingPed = findExistingNPC(npcConfig)
+    if existingPed then
+        addTargetToEntity(existingPed, npcConfig, index)
+        SpawnedNPCs[index] = {
+            entity = existingPed,
+            coords = npcConfig.coords,
+            heading = npcConfig.heading,
+            data = npcConfig
+        }
+
+        if Config.Debug then
+            print(('[Auction NPC] Rebound existing %s at index %d (entity: %d)'):format(
+                npcConfig.name or 'NPC', index, existingPed
+            ))
+        end
+
+        return existingPed
     end
     
     local modelHash = loadModel(npcConfig.model)
@@ -154,8 +214,8 @@ end
 -- SERVER EVENT - UI OPEN
 -- ============================================
 
-RegisterNetEvent('auction:client:openFromNPC', function()
-    NUI.Open()
+RegisterNetEvent('auction:client:openFromNPC', function(npcIndex)
+    NUI.Open({ npcIndex = npcIndex })
 end)
 
 -- ============================================
@@ -170,6 +230,7 @@ CreateThread(function()
     
     -- Initial spawn
     Wait(1000)
+    cleanupExistingNPCs()
     spawnAllNPCs()
     
     -- Periodic respawn check
@@ -184,6 +245,18 @@ CreateThread(function()
             local spawned = SpawnedNPCs[index]
             
             if not spawned or not DoesEntityExist(spawned.entity) then
+                local existingPed = findExistingNPC(npcConfig)
+                if existingPed then
+                    SpawnedNPCs[index] = {
+                        entity = existingPed,
+                        coords = npcConfig.coords,
+                        heading = npcConfig.heading,
+                        data = npcConfig
+                    }
+                    addTargetToEntity(existingPed, npcConfig, index)
+                    goto npc_continue
+                end
+
                 -- NPC missing, check respawn timer
                 if not spawned or not spawned.respawnTimer then
                     if Config.Debug then
@@ -204,6 +277,8 @@ CreateThread(function()
                     SpawnedNPCs[index].respawnTimer = nil
                 end
             end
+
+            ::npc_continue::
         end
         
         ::continue::

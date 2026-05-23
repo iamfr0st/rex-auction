@@ -1,0 +1,247 @@
+{
+    "pendingCollections": {
+        "IIU04069": {
+            "items": [
+                {
+                    "itemName": "horse_7",
+                    "count": 1,
+                    "auctionId": "AUC_1779493534_8986",
+                    "itemLabel": "Appaloosa Few-Spotted",
+                    "sellerName": "Arturo Gatilyo",
+                    "imageMeta": {
+                        "itemName": "horse_7",
+                        "fallbackUrl": "nui://rex-auction/web/dist/fallback.svg",
+                        "loaded": false,
+                        "url": "https://cdn.discordapp.com/attachments/1063908853391036487/1506349157550391487/20260520013312_1.jpg?ex=6a11e4f9&is=6a109379&hm=99ab024f752b5ca894f38fd3819dc5e0d3ab75dbc9ce01d92e885da88b2b6cb4&"
+                    },
+                    "soldForCents": 0,
+                    "image": "https://cdn.discordapp.com/attachments/1063908853391036487/1506349157550391487/20260520013312_1.jpg?ex=6a11e4f9&is=6a109379&hm=99ab024f752b5ca894f38fd3819dc5e0d3ab75dbc9ce01d92e885da88b2b6cb4&",
+                    "metadata": {
+                        "horseAccEquipmentMinValue": 0,
+                        "auctionCategory": "horses",
+                        "horseAccEquipmentValue": 7,
+                        "horseSpawnCategory": "herd_rare",
+                        "horseBorn": 1775270944,
+                        "horseImageUrl": "https://cdn.discordapp.com/attachments/1063908853391036487/1506349157550391487/20260520013312_1.jpg?ex=6a11e4f9&is=6a109379&hm=99ab024f752b5ca894f38fd3819dc5e0d3ab75dbc9ce01d92e885da88b2b6cb4&",
+                        "horseAccMinValue": 0,
+                        "horseStable": "valentine",
+                        "horseDbId": 7,
+                        "horseAccCapacityMinValue": 0,
+                        "horseSpeedCapacityValue": 10,
+                        "horseAccEquipmentMaxValue": 10,
+                        "horseSpeedEquipmentMinValue": 0,
+                        "horseSpeedValue": 7,
+                        "horseSpeedCapacityMinValue": 0,
+                        "horseSpeedMinValue": 0,
+                        "horseRarity": "epic",
+                        "horseAccCapacityValue": 9,
+                        "horseGender": "male",
+                        "horseXp": 1710,
+                        "horseSpeedEquipmentValue": 7,
+                        "horseId": "AGK210",
+                        "horseSpeedEquipmentMaxValue": 10,
+                        "horseHandling": "HORSE_HANDLING_ELITE",
+                        "horseModel": "a_c_horse_appaloosa_fewspotted_pc",
+                        "auctionType": "horse",
+                        "horseName": "Appaloosa Few-Spotted",
+                        "horseSpeedCapacityMaxValue": 10,
+                        "horseSpeedMaxValue": 10,
+                        "horseAccValue": 7,
+                        "horseAccMaxValue": 10,
+                        "preservedStats": {
+                            "accelerationPoints": 1000,
+                            "healthPoints": 1000,
+                            "agilityPoints": 1000,
+                            "staminaPoints": 1000,
+                            "bondingPoints": 817,
+                            "speedPoints": 1000
+                        },
+                        "horseAccCapacityMaxValue": 10
+                    }
+                }
+            ]
+        }
+    },
+    "auctions": {
+        "AUC_1779492727_6931": {
+            "category": "horses",
+            "totalBids": 0,
+            "owner": {
+                "name": "Arturo Gatilyo",
+                "id": 3,
+                "citizenid": "IIU04069"
+            },
+            "currentBidCents": 0,
+            "item": {
+                "label": "Appaloosa Few-Spotted",
+                "name": "horse_7",
+                "imageMeta": {
+                    "itemName": "horse_7",
+                    "fallbackUrl": "nui://rex-auction/web/dist/fallback.svg",
+                    "loaded": false,
+                    "url": "https://static.wikia.nocookie.net/reddeadredemption/images/a/a7/Few_Spotted_Appaloosa.PNG/revision/latest/scale-to-width-down/188?cb=20240420133829"
+                },
+                "count": 1,
+                "image": "https://static.wikia.nocookie.net/reddeadredemption/images/a/a7/Few_Spotted_Appaloosa.PNG/revision/latest/scale-to-width-down/188?cb=20240420133829",
+                "metadata": {
+                    "horseSpeedEquipmentMaxValue": 10,
+                    "horseModel": "a_c_horse_appaloosa_fewspotted_pc",
+                    "horseAccEquipmentMinValue": 0,
+                    "horseRarity": "epic",
+                    "horseAccCapacityValue": 9,
+                    "horseGender": "male",
+                    "horseAccMaxValue": 10,
+                    "horseName": "Appaloosa Few-Spotted",
+                    "horseAccEquipmentValue": 7,
+                    "horseAccCapacityMaxValue": 10,
+                    "horseSpeedCapacityMaxValue": 10,
+                    "horseSpawnCategory": "herd_rare",
+                    "horseBorn": 1775270944,
+                    "horseXp": 1705,
+                    "auctionCategory": "horses",
+                    "horseAccMinValue": 0,
+                    "horseSpeedEquipmentValue": 7,
+                    "horseStable": "valentine",
+                    "horseId": "AGK210",
+                    "horseDbId": 7,
+                    "horseAccCapacityMinValue": 0,
+                    "horseSpeedCapacityValue": 10,
+                    "horseHandling": "HORSE_HANDLING_ELITE",
+                    "horseAccEquipmentMaxValue": 10,
+                    "auctionType": "horse",
+                    "horseSpeedEquipmentMinValue": 0,
+                    "horseSpeedMaxValue": 10,
+                    "horseSpeedValue": 7,
+                    "horseAccValue": 7,
+                    "horseSpeedCapacityMinValue": 0,
+                    "preservedStats": {
+                        "accelerationPoints": 1000,
+                        "healthPoints": 1000,
+                        "agilityPoints": 1000,
+                        "staminaPoints": 1000,
+                        "bondingPoints": 817,
+                        "speedPoints": 1000
+                    },
+                    "horseSpeedMinValue": 0
+                }
+            },
+            "endTime": 1779496327,
+            "creationFeeCents": 70,
+            "id": "AUC_1779492727_6931",
+            "createdAt": 1779492727,
+            "startingBidCents": 500,
+            "status": "cancelled",
+            "buyoutPriceCents": 20000
+        },
+        "AUC_1779492388_2004": {
+            "category": "resources",
+            "totalBids": 0,
+            "owner": {
+                "name": "Angelito Gatilyo",
+                "id": 2,
+                "citizenid": "NAA74277"
+            },
+            "currentBidCents": 0,
+            "item": {
+                "label": "Gold Bar",
+                "name": "gold_bar",
+                "imageMeta": {
+                    "itemName": "gold_bar",
+                    "fallbackUrl": "nui://rex-auction/web/dist/fallback.svg",
+                    "loaded": false,
+                    "url": "nui://rsg-inventory/html/images/gold_bar.png"
+                },
+                "count": 1,
+                "image": "nui://rsg-inventory/html/images/gold_bar.png",
+                "metadata": []
+            },
+            "endTime": 1779495988,
+            "creationFeeCents": 70,
+            "id": "AUC_1779492388_2004",
+            "createdAt": 1779492388,
+            "startingBidCents": 100,
+            "status": "ended",
+            "buyoutPriceCents": 15000
+        },
+        "AUC_1779493534_8986": {
+            "category": "horses",
+            "totalBids": 0,
+            "owner": {
+                "name": "Arturo Gatilyo",
+                "id": 3,
+                "citizenid": "IIU04069"
+            },
+            "currentBidCents": 0,
+            "item": {
+                "label": "Appaloosa Few-Spotted",
+                "name": "horse_7",
+                "imageMeta": {
+                    "itemName": "horse_7",
+                    "fallbackUrl": "nui://rex-auction/web/dist/fallback.svg",
+                    "loaded": false,
+                    "url": "https://cdn.discordapp.com/attachments/1063908853391036487/1506349157550391487/20260520013312_1.jpg?ex=6a11e4f9&is=6a109379&hm=99ab024f752b5ca894f38fd3819dc5e0d3ab75dbc9ce01d92e885da88b2b6cb4&"
+                },
+                "metadata": {
+                    "horseAccEquipmentMinValue": 0,
+                    "auctionCategory": "horses",
+                    "horseAccEquipmentValue": 7,
+                    "horseSpawnCategory": "herd_rare",
+                    "horseBorn": 1775270944,
+                    "horseImageUrl": "https://cdn.discordapp.com/attachments/1063908853391036487/1506349157550391487/20260520013312_1.jpg?ex=6a11e4f9&is=6a109379&hm=99ab024f752b5ca894f38fd3819dc5e0d3ab75dbc9ce01d92e885da88b2b6cb4&",
+                    "horseAccMinValue": 0,
+                    "horseStable": "valentine",
+                    "horseDbId": 7,
+                    "horseAccCapacityMinValue": 0,
+                    "horseSpeedCapacityValue": 10,
+                    "horseAccEquipmentMaxValue": 10,
+                    "horseSpeedEquipmentMinValue": 0,
+                    "horseSpeedValue": 7,
+                    "horseSpeedCapacityMinValue": 0,
+                    "horseSpeedMinValue": 0,
+                    "horseRarity": "epic",
+                    "horseAccCapacityValue": 9,
+                    "horseGender": "male",
+                    "horseXp": 1710,
+                    "horseSpeedEquipmentValue": 7,
+                    "horseId": "AGK210",
+                    "horseSpeedEquipmentMaxValue": 10,
+                    "horseHandling": "HORSE_HANDLING_ELITE",
+                    "horseModel": "a_c_horse_appaloosa_fewspotted_pc",
+                    "auctionType": "horse",
+                    "horseName": "Appaloosa Few-Spotted",
+                    "horseSpeedCapacityMaxValue": 10,
+                    "horseSpeedMaxValue": 10,
+                    "horseAccValue": 7,
+                    "horseAccMaxValue": 10,
+                    "preservedStats": {
+                        "accelerationPoints": 1000,
+                        "healthPoints": 1000,
+                        "agilityPoints": 1000,
+                        "staminaPoints": 1000,
+                        "bondingPoints": 817,
+                        "speedPoints": 1000
+                    },
+                    "horseAccCapacityMaxValue": 10
+                },
+                "image": "https://cdn.discordapp.com/attachments/1063908853391036487/1506349157550391487/20260520013312_1.jpg?ex=6a11e4f9&is=6a109379&hm=99ab024f752b5ca894f38fd3819dc5e0d3ab75dbc9ce01d92e885da88b2b6cb4&",
+                "count": 1
+            },
+            "endTime": 1779497134,
+            "creationFeeCents": 70,
+            "id": "AUC_1779493534_8986",
+            "buyoutPriceCents": 20000,
+            "startingBidCents": 500,
+            "status": "ended",
+            "createdAt": 1779493534
+        }
+    },
+    "escrow": {
+        "funds": [],
+        "items": {}
+    },
+    "bidHistory": {
+        "AUC_1779492727_6931": [],
+        "AUC_1779492388_2004": [],
+        "AUC_1779493534_8986": []
+    }
+}

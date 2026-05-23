@@ -32,11 +32,70 @@ local ImageCache = {
 
 -- Fallback image URL for missing images
 local FALLBACK_IMAGE = 'nui://' .. GetCurrentResourceName() .. '/web/dist/fallback.svg'
+local HORSE_PREVIEW_IMAGE = 'nui://' .. GetCurrentResourceName() .. '/web/dist/horse-preview.svg'
+local HORSE_AUCTION_DISTANCE = 4.0
+local HorseStatsCache = {}
+local HORSE_PREVIEW_IMAGES = {
+    ['a_c_horse_arabian_white'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/5/50/White_Arabian.PNG/revision/latest/scale-to-width-down/162?cb=20240421135017',
+    ['a_c_horse_arabian_redchestnut_pc'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/3/33/Red_Chestnut_Arabian_%28Story_Mode%29.PNG/revision/latest/scale-to-width-down/175?cb=20240421135112',
+    ['a_c_horse_arabian_warpedbrindle_pc'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/2/27/Warped_Brindle_Arabian_New.PNG/revision/latest/scale-to-width-down/176?cb=20240421135144',
+    ['a_c_horse_andalusian_perlino'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/8/81/Perlino_Andalusian.PNG/revision/latest/scale-to-width-down/188?cb=20240420130417',
+    ['a_c_horse_mustang_tigerstripedbay'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/4/44/Tiger_Striped_Bay_Mustang.PNG/revision/latest/scale-to-width-down/184?cb=20240421231130',
+    ['a_c_horse_shire_ravenblack'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/7/75/Raven_Black_Shire.PNG/revision/latest/scale-to-width-down/186?cb=20240421233442',
+    ['a_c_horse_kladruber_black'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/8/8e/Black_Kladruber.PNG/revision/latest/scale-to-width-down/185?cb=20240421165440',
+    ['a_c_horse_appaloosa_fewspotted_pc'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/a/a7/Few_Spotted_Appaloosa.PNG/revision/latest/scale-to-width-down/188?cb=20240420133829',
+    ['a_c_horse_mustang_goldendun'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/b/b2/Golden_Dun_Mustang.PNG/revision/latest/scale-to-width-down/192?cb=20240421231123',
+    ['a_c_horse_nokota_whiteroan'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/6/6c/White_Roan_Nokota.PNG/revision/latest/scale-to-width-down/181?cb=20240421232324',
+    ['a_c_horse_missourifoxtrotter_silverdapplepinto'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/4/42/Silver_Dapple_Minto_Missouri_Fox_Trotter.PNG/revision/latest/scale-to-width-down/171?cb=20240421175828'
+}
+local HORSE_HANDLING_BY_MODEL = {
+    ['a_c_horse_arabian_white'] = 'HORSE_HANDLING_ELITE',
+    ['a_c_horse_arabian_redchestnut_pc'] = 'HORSE_HANDLING_ELITE',
+    ['a_c_horse_arabian_warpedbrindle_pc'] = 'HORSE_HANDLING_ELITE',
+    ['a_c_horse_andalusian_perlino'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_mustang_tigerstripedbay'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_shire_ravenblack'] = 'HORSE_HANDLING_HEAVY',
+    ['a_c_horse_kladruber_black'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_appaloosa_fewspotted_pc'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_mustang_goldendun'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_nokota_whiteroan'] = 'HORSE_HANDLING_RACE',
+    ['a_c_horse_missourifoxtrotter_silverdapplepinto'] = 'HORSE_HANDLING_STANDARD'
+}
+
+local function getHorsePreviewImage(model)
+    if not model then
+        return HORSE_PREVIEW_IMAGE
+    end
+
+    return HORSE_PREVIEW_IMAGES[string.lower(tostring(model))] or HORSE_PREVIEW_IMAGE
+end
+
+local function getHorseHandlingLabelFromModel(model)
+    return HORSE_HANDLING_BY_MODEL[string.lower(tostring(model or ''))]
+end
+
+local function getHorseHandlingLabelFromXp(xp)
+    xp = tonumber(xp) or 0
+
+    if xp >= 1000 then
+        return 'HORSE_HANDLING_ELITE'
+    elseif xp >= 400 then
+        return 'HORSE_HANDLING_RACE'
+    elseif xp >= 200 then
+        return 'HORSE_HANDLING_STANDARD'
+    end
+
+    return 'HORSE_HANDLING_HEAVY'
+end
 
 -- Generate image URL from item name
 local function getItemImage(itemName)
     if not itemName then return nil end
-    return 'nui://rsg-inventory/html/images/' .. itemName .. '.png'
+
+    local sharedItem = RSGCore and RSGCore.Shared and RSGCore.Shared.Items and RSGCore.Shared.Items[itemName]
+    local imageName = sharedItem and sharedItem.image or (itemName .. '.png')
+
+    return 'nui://rsg-inventory/html/images/' .. imageName
 end
 
 -- Build image metadata for NUI
@@ -49,6 +108,194 @@ local function buildImageMeta(itemName)
         loaded = ImageCache.loaded[imageUrl] or false,
         failed = ImageCache.failed[imageUrl] or false
     }
+end
+
+local function buildCustomImageMeta(itemName, imageUrl)
+    return {
+        url = imageUrl,
+        itemName = itemName,
+        fallbackUrl = FALLBACK_IMAGE,
+        loaded = ImageCache.loaded[imageUrl] or false,
+        failed = ImageCache.failed[imageUrl] or false
+    }
+end
+
+local function clampValue(value, minValue, maxValue)
+    if value > maxValue then
+        return maxValue
+    elseif value < minValue then
+        return minValue
+    end
+
+    return value
+end
+
+local function getHorseTrainingAttributePoints(xp)
+    xp = tonumber(xp) or 0
+
+    if xp >= 4000 then return 2000 end
+    if xp >= 3000 then return 1750 end
+    if xp >= 2000 then return 1500 end
+    if xp >= 1000 then return 1000 end
+    if xp >= 500 then return 900 end
+    if xp >= 400 then return 500 end
+    if xp >= 300 then return 400 end
+    if xp >= 200 then return 300 end
+    if xp >= 100 then return 200 end
+    return 100
+end
+
+local function getHorseHandlingLabelFromRank(rank)
+    local handlingRank = tonumber(rank) or 0
+
+    if handlingRank == 0 or handlingRank == 1 then
+        return 'HORSE_HANDLING_HEAVY'
+    elseif handlingRank == 2 or handlingRank == 3 then
+        return 'HORSE_HANDLING_STANDARD'
+    elseif handlingRank == 4 or handlingRank == 5 then
+        return 'HORSE_HANDLING_RACE'
+    elseif handlingRank >= 6 and handlingRank <= 9 then
+        return 'HORSE_HANDLING_ELITE'
+    end
+
+    return 'HORSE_HANDLING_HEAVY'
+end
+
+local function buildHorseStatsFromPed(horsePed, model, xp)
+    local speedBase = (GetAttributeBaseRank(horsePed, 5) or 0) + 1
+    local speedBonus = GetAttributeBonusRank(horsePed, 5) or 0
+    local accBase = (GetAttributeBaseRank(horsePed, 6) or 0) + 1
+    local accBonus = GetAttributeBonusRank(horsePed, 6) or 0
+    local handlingLabel = getHorseHandlingLabelFromXp(xp)
+    if not handlingLabel then
+        handlingLabel = getHorseHandlingLabelFromModel(model) or getHorseHandlingLabelFromRank(GetAttributeRank(horsePed, 4) or 0)
+    end
+
+    return {
+        preservedStats = {
+            healthPoints = tonumber(GetAttributePoints(horsePed, 0) or 0) or 0,
+            staminaPoints = tonumber(GetAttributePoints(horsePed, 1) or 0) or 0,
+            agilityPoints = tonumber(GetAttributePoints(horsePed, 4) or 0) or 0,
+            speedPoints = tonumber(GetAttributePoints(horsePed, 5) or 0) or 0,
+            accelerationPoints = tonumber(GetAttributePoints(horsePed, 6) or 0) or 0,
+            bondingPoints = tonumber(GetAttributePoints(horsePed, 7) or 0) or 0,
+        },
+        horseSpeedValue = speedBase,
+        horseSpeedMinValue = 0,
+        horseSpeedMaxValue = 10,
+        horseSpeedEquipmentValue = clampValue(speedBase + speedBonus, 0, 10),
+        horseSpeedEquipmentMinValue = 0,
+        horseSpeedEquipmentMaxValue = 10,
+        horseSpeedCapacityValue = clampValue(speedBase + 3, 0, 10),
+        horseSpeedCapacityMinValue = 0,
+        horseSpeedCapacityMaxValue = 10,
+        horseAccValue = accBase,
+        horseAccMinValue = 0,
+        horseAccMaxValue = 10,
+        horseAccEquipmentValue = clampValue(accBase + accBonus, 0, 10),
+        horseAccEquipmentMinValue = 0,
+        horseAccEquipmentMaxValue = 10,
+        horseAccCapacityValue = clampValue(accBase + 2, 0, 10),
+        horseAccCapacityMinValue = 0,
+        horseAccCapacityMaxValue = 10,
+        horseHandling = handlingLabel,
+    }
+end
+
+local function getHorseAuctionStats(model, xp)
+    local modelName = tostring(model or '')
+    local modelHash = joaat(modelName)
+    local cacheKey = string.lower(modelName) .. ':' .. tostring(tonumber(xp) or 0)
+
+    if HorseStatsCache[cacheKey] then
+        return HorseStatsCache[cacheKey]
+    end
+
+    if not IsModelValid(modelHash) then
+        return nil
+    end
+
+    RequestModel(modelHash)
+    local timeoutAt = GetGameTimer() + 5000
+    while not HasModelLoaded(modelHash) and GetGameTimer() < timeoutAt do
+        Wait(0)
+    end
+
+    if not HasModelLoaded(modelHash) then
+        return nil
+    end
+
+    local playerPed = PlayerPedId()
+    local spawnCoords = GetEntityCoords(playerPed)
+    local horsePed = CreatePed(modelHash, spawnCoords.x, spawnCoords.y, spawnCoords.z - 100.0, 0.0, false, false, 0, 0)
+
+    if not horsePed or horsePed == 0 or not DoesEntityExist(horsePed) then
+        SetModelAsNoLongerNeeded(modelHash)
+        return nil
+    end
+
+    SetEntityVisible(horsePed, false)
+    SetEntityCollision(horsePed, false, false)
+    FreezeEntityPosition(horsePed, true)
+    SetEntityInvincible(horsePed, true)
+    SetEntityCanBeDamaged(horsePed, false)
+
+    local attributePoints = getHorseTrainingAttributePoints(xp)
+    SetAttributePoints(horsePed, 0, attributePoints)
+    SetAttributePoints(horsePed, 1, attributePoints)
+    SetAttributePoints(horsePed, 4, attributePoints)
+    SetAttributePoints(horsePed, 5, attributePoints)
+    SetAttributePoints(horsePed, 6, attributePoints)
+
+    local stats = buildHorseStatsFromPed(horsePed, modelName, xp)
+    HorseStatsCache[cacheKey] = stats
+
+    DeletePed(horsePed)
+    SetModelAsNoLongerNeeded(modelHash)
+
+    return stats
+end
+
+local function applyHorseAuctionStats(metadata, horsePed)
+    if type(metadata) ~= 'table' then
+        return metadata
+    end
+
+    local stats = nil
+    if horsePed and horsePed ~= 0 and DoesEntityExist(horsePed) then
+        stats = buildHorseStatsFromPed(horsePed, metadata.horseModel, metadata.horseXp)
+    else
+        stats = getHorseAuctionStats(metadata.horseModel, metadata.horseXp)
+    end
+
+    if not stats then
+        return metadata
+    end
+
+    for key, value in pairs(stats) do
+        if key == 'horseHandling' then
+            metadata[key] = value
+        elseif metadata[key] == nil then
+            metadata[key] = value
+        end
+    end
+
+    return metadata
+end
+
+local function enrichHorseAuctionPayload(data)
+    if type(data) ~= 'table' or type(data.auctions) ~= 'table' then
+        return data
+    end
+
+    for _, auction in ipairs(data.auctions) do
+        local metadata = auction and auction.item and auction.item.metadata
+        if type(metadata) == 'table' and metadata.auctionType == 'horse' then
+            applyHorseAuctionStats(metadata)
+        end
+    end
+
+    return data
 end
 
 -- Report missing image to server
@@ -106,6 +353,92 @@ local function getInventoryItem(itemName)
     return nil
 end
 
+local function buildHorseAuctionEntry(horseData, horsePed)
+    if not horseData or not horseData.id or not horseData.horseid or not horseData.horse then
+        return nil
+    end
+
+    local horseName = horseData.name or 'Owned Horse'
+    local horseModel = horseData.horse or 'horse'
+    local pseudoItemName = 'horse_' .. tostring(horseData.id)
+    local horseImage = getHorsePreviewImage(horseModel)
+
+    local metadata = {
+        auctionType = 'horse',
+        auctionCategory = 'horses',
+        horseDbId = tonumber(horseData.id),
+        horseId = tostring(horseData.horseid),
+        horseModel = horseModel,
+        horseName = horseName,
+        horseGender = horseData.gender,
+        horseStable = horseData.stable,
+        horseXp = tonumber(horseData.horsexp) or 0,
+        horseBorn = tonumber(horseData.born) or 0
+    }
+
+    applyHorseAuctionStats(metadata, horsePed)
+
+    return {
+        name = pseudoItemName,
+        label = horseName,
+        count = 1,
+        slot = -1,
+        metadata = metadata,
+        image = horseImage,
+        imageMeta = buildCustomImageMeta(pseudoItemName, horseImage)
+    }
+end
+
+local function getNearbyActiveHorseAuctionEntry(cb)
+    if GetResourceState('rsg-horses') ~= 'started' then
+        cb(nil)
+        return
+    end
+
+    local ok, horsePed = pcall(function()
+        return exports['rsg-horses']:CheckActiveHorse()
+    end)
+
+    if not ok or not horsePed or horsePed == 0 or not DoesEntityExist(horsePed) or IsEntityDead(horsePed) then
+        cb(nil)
+        return
+    end
+
+    local playerPed = PlayerPedId()
+    if not playerPed or playerPed == 0 then
+        cb(nil)
+        return
+    end
+
+    local distance = #(GetEntityCoords(playerPed) - GetEntityCoords(horsePed))
+    if distance > HORSE_AUCTION_DISTANCE then
+        cb(nil)
+        return
+    end
+
+    RSGCore.Functions.TriggerCallback('rsg-horses:server:GetActiveHorse', function(horseData)
+        cb(buildHorseAuctionEntry(horseData, horsePed))
+    end)
+end
+
+local function refreshAuctionInventory(cb)
+    refreshInventory()
+
+    getNearbyActiveHorseAuctionEntry(function(horseEntry)
+        if horseEntry then
+            table.insert(playerInventory, 1, horseEntry)
+        end
+
+        if cb then
+            cb(playerInventory)
+        end
+
+        if isOpen then
+            NUI.SendMessage('inventoryUpdated', { inventory = playerInventory })
+        end
+    end)
+end
+
 -- ============================================
 -- NUI HELPERS
 -- ============================================
@@ -126,6 +459,8 @@ function NUI.Open(data)
     -- Refresh inventory before opening
     local inventory = refreshInventory()
     local PlayerData = RSGCore.Functions.GetPlayerData()
+    local npcIndex = data and tonumber(data.npcIndex) or nil
+    local moneyType = 'bank'
     
     if not PlayerData then
         isOpen = false
@@ -134,11 +469,23 @@ function NUI.Open(data)
     end
     
     local cashCents, bankCents = 0, 0
+
+    if npcIndex and Config.AuctioneerNPCs and Config.AuctioneerNPCs[npcIndex] and Config.AuctioneerNPCs[npcIndex].bank then
+        moneyType = Config.AuctioneerNPCs[npcIndex].bank
+    end
     
     if PlayerData.money then
+        local selectedBankBalance = PlayerData.money[moneyType]
+        if selectedBankBalance == nil then
+            selectedBankBalance = PlayerData.money['bank'] or 0
+        end
+
+        local cashBalance = math.max(0, PlayerData.money['cash'] or 0)
+        selectedBankBalance = math.max(0, selectedBankBalance)
+
         -- Convert to cents for the UI
-        cashCents = Money.dollarsToCents(PlayerData.money['cash'] or 0)
-        bankCents = Money.dollarsToCents(PlayerData.money['bank'] or 0)
+        cashCents = Money.dollarsToCents(cashBalance)
+        bankCents = Money.dollarsToCents(selectedBankBalance)
     end
     
     -- Get fee configuration
@@ -160,23 +507,36 @@ function NUI.Open(data)
         end
     end
     
-    SetNuiFocus(true, true)
-    NUI.SendMessage('open', {
-        inventory = inventory,
-        cashCents = cashCents,
-        bankCents = bankCents,
-        citizenid = PlayerData.citizenid,
-        playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown',
-        feeConfig = feeConfig,
-        buyoutConfig = buyoutConfig,
-        categories = categories
-    })
-    
-    -- Request current auctions
-    TriggerServerEvent('auction:server:getAuctions')
-    
-    -- Also request pending collections
-    TriggerServerEvent('auction:server:getPendingCollections')
+    local function openWithBalances(resolvedCashCents, resolvedBankCents)
+        SetNuiFocus(true, true)
+        NUI.SendMessage('open', {
+            inventory = inventory,
+            cashCents = resolvedCashCents,
+            bankCents = resolvedBankCents,
+            citizenid = PlayerData.citizenid,
+            playerName = PlayerData.charinfo and (PlayerData.charinfo.firstname .. ' ' .. PlayerData.charinfo.lastname) or 'Unknown',
+            feeConfig = feeConfig,
+            buyoutConfig = buyoutConfig,
+            categories = categories
+        })
+
+        refreshAuctionInventory()
+
+        -- Request current auctions
+        TriggerServerEvent('auction:server:getAuctions')
+
+        -- Also request pending collections
+        TriggerServerEvent('auction:server:getPendingCollections')
+    end
+
+    RSGCore.Functions.TriggerCallback('auction:server:getOpeningBalances', function(balanceData)
+        if balanceData then
+            cashCents = balanceData.cashCents or cashCents
+            bankCents = balanceData.bankCents or bankCents
+        end
+
+        openWithBalances(cashCents, bankCents)
+    end, npcIndex)
 end
 
 function NUI.Close()
@@ -225,6 +585,7 @@ RegisterNuiCallback('createAuction', function(data, cb)
         count = data.count or 1,
         metadata = item.metadata,
         image = item.image,
+        customImageUrl = data.customImageUrl,
         category = data.category,
         startingBid = data.startingBid or 1,  -- Already in cents from UI
         buyoutPrice = data.buyoutPrice or nil,  -- Optional buyout price in cents
@@ -265,8 +626,9 @@ RegisterNuiCallback('buyoutAuction', function(data, cb)
 end)
 
 RegisterNuiCallback('getInventory', function(_, cb)
-    local inventory = refreshInventory()
-    cb({ success = true, inventory = inventory })
+    refreshAuctionInventory(function(inventory)
+        cb({ success = true, inventory = inventory })
+    end)
 end)
 
 RegisterNuiCallback('getAuctions', function(_, cb)
@@ -371,12 +733,12 @@ end)
 
 RegisterNetEvent('auction:client:receiveAuctions', function(data)
     if not isOpen then return end
-    NUI.SendMessage('receiveAuctions', data)
+    NUI.SendMessage('receiveAuctions', enrichHorseAuctionPayload(data))
 end)
 
 RegisterNetEvent('auction:client:receiveSearchResults', function(data)
     if not isOpen then return end
-    NUI.SendMessage('receiveSearchResults', data)
+    NUI.SendMessage('receiveSearchResults', enrichHorseAuctionPayload(data))
 end)
 
 RegisterNetEvent('auction:client:createResult', function(result)
@@ -384,9 +746,11 @@ RegisterNetEvent('auction:client:createResult', function(result)
     NUI.SendMessage('createResult', result)
     
     if result.success then
-        -- Refresh inventory
-        refreshInventory()
-        NUI.SendMessage('inventoryUpdated', { inventory = playerInventory })
+        if result.auction and result.auction.item and result.auction.item.metadata and result.auction.item.metadata.auctionType == 'horse' then
+            TriggerEvent('rsg-horses:client:despawnHorseAfterListing')
+        end
+
+        refreshAuctionInventory()
     end
 end)
 
@@ -400,9 +764,7 @@ RegisterNetEvent('auction:client:cancelResult', function(result)
     NUI.SendMessage('cancelResult', result)
 
     if result.success then
-        -- Refresh inventory
-        refreshInventory()
-        NUI.SendMessage('inventoryUpdated', { inventory = playerInventory })
+        refreshAuctionInventory()
     end
 end)
 
@@ -503,8 +865,7 @@ RegisterNetEvent('auction:client:collectionResult', function(result)
     if result.success then
         -- Refresh inventory if item was collected
         if result.type == 'item' then
-            refreshInventory()
-            NUI.SendMessage('inventoryUpdated', { inventory = playerInventory })
+            refreshAuctionInventory()
         end
     end
 end)

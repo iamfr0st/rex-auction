@@ -9,7 +9,7 @@ Config = {
             label = 'Weapons',
             icon = '🔫',
             description = 'Firearms, melee weapons, and ammunition',
-            items = {}  -- Empty = allows any item matching weapon patterns
+            items = {}
         },
         {
             id = 'ammunition',
@@ -47,6 +47,13 @@ Config = {
             items = {}
         },
         {
+            id = 'horses',
+            label = 'Horses',
+            icon = '🐎',
+            description = 'Owned horses listed from nearby active mounts',
+            items = {}
+        },
+        {
             id = 'medicine',
             label = 'Medicine',
             icon = '💊',
@@ -75,45 +82,43 @@ Config = {
             items = {}
         }
     },
-    
+
     -- Auction Settings
-    MinStartingBid = 0.01,      -- Minimum starting bid in dollars (1 cent)
-    MinDuration = 60,           -- Minimum auction duration in seconds (1 minute)
-    MaxDuration = 604800,       -- Maximum auction duration in seconds (7 days)
-    DefaultDuration = 3600,     -- Default duration (1 hour)
-    MaxAuctionsPerPlayer = 10,  -- Maximum active auctions per player
-    
+    MinStartingBid = 0.01,
+    MinDuration = 60,
+    MaxDuration = 604800,
+    DefaultDuration = 3600,
+    MaxAuctionsPerPlayer = 10,
+
     -- Rate Limiting (milliseconds between actions)
     RateLimits = {
-        createAuction = 5000,   -- 5 seconds between creating auctions
-        placeBid = 1000,        -- 1 second between bids
-        buyoutAuction = 3000,   -- 3 seconds between buyouts
-        collectItem = 500,      -- 0.5 seconds between item collections
-        collectMoney = 500,     -- 0.5 seconds between money collections
+        createAuction = 5000,
+        placeBid = 1000,
+        buyoutAuction = 3000,
+        collectItem = 500,
+        collectMoney = 500,
     },
-    
+
     -- Bid Settings
-    MinBidIncrement = 0.05,     -- 5% minimum increase over current bid
+    MinBidIncrement = 0.05,
 
     -- Buyout Price Settings
     Buyout = {
-        enabled = true,              -- Enable/disable buyout feature
-        minMultiplier = 1.5,         -- Buyout must be at least 1.5x the starting bid
+        enabled = true,
+        minMultiplier = 1.5,
     },
-    
+
     -- Auction Creation Fee Settings
-    -- Fee formula: BaseFee + (DurationMultiplier * hours) + (QuantityMultiplier * quantity)
     CreationFee = {
-        enabled = true,              -- Enable/disable creation fees
-        baseFee = 0.50,              -- Base fee for any auction
-        durationMultiplier = 0.10,   -- Fee per hour of duration
-        quantityMultiplier = 0.10,   -- Fee per item quantity
-        maxFee = 500,                -- Maximum fee cap
-        minFee = 0.50,               -- Minimum fee (base fee)
+        enabled = true,
+        baseFee = 0.50,
+        durationMultiplier = 0.10,
+        quantityMultiplier = 0.10,
+        maxFee = 500,
+        minFee = 0.50,
     },
-    
+
     -- Item Blacklist
-    -- Items in this list cannot be auctioned by players
     BlacklistedItems = {
         'dollar',
         'cent',
@@ -122,73 +127,57 @@ Config = {
         'money_clip',
         'blood_money_clip',
     },
-    
+
     -- NPC Auctioneers
-    -- Players interact with these NPCs to open the auction UI
     AuctioneerNPCs = {
         {
-            model = 'cs_valauctionboss_01',   -- RDR2 auctioneer model
-            coords = vector3(-240.97, 658.76, 113.33),  -- Valentine area
+            model = 'cs_valauctionboss_01',
+            coords = vector3(-240.97, 658.76, 113.33),
             heading = 149.33,
+            bank = 'valbank',
             name = 'Valentine Auctioneer',
-            respawnDelay = 5000   -- Respawn after 5 seconds if killed/removed
+            respawnDelay = 5000
         },
-        -- Add more NPCs as needed:
-        -- {
-        --     model = 'cs_valauctionboss_01',
-        --     coords = vector3(x, y, z),
-        --     heading = h,
-        --     name = 'Saint Denis Auctioneer',
-        --     respawnDelay = 5000
-        -- },
     },
-    
+
     -- NPC Interaction Settings (ox_target)
-    InteractionDistance = 2.5,      -- Max distance to target NPC
-    
+    InteractionDistance = 2.5,
+
     -- UI Settings
-    RefreshInterval = 1000,     -- UI refresh rate in ms
-    
+    RefreshInterval = 1000,
+
     -- Notification Settings
-    NotificationDuration = 5000, -- How long notifications show (ms)
-    
+    NotificationDuration = 5000,
+
     -- Persistence
-    SaveInterval = 60000,       -- Auto-save interval in ms (1 minute)
-    
+    SaveInterval = 60000,
+
     -- Debug
     Debug = false,
-    
+
     -- Discord Webhooks
     Webhooks = {
-        -- Default webhook URL (used if event-specific URL not set)
-        -- Set to your Discord webhook URL, e.g., 'https://discord.com/api/webhooks/...'
         defaultUrl = nil,
-        
-        -- Event-specific webhook URLs (optional, overrides defaultUrl)
         urls = {
-            auctionCreated = nil,     -- New auctions
-            bidPlaced = nil,          -- Bid notifications (can be spammy)
-            auctionWon = nil,         -- Auction winners
-            auctionExpired = nil,     -- Expired auctions (no bids)
-            auctionCancelled = nil,   -- Cancelled auctions
-            highValueSale = nil,      -- High value alerts
+            auctionCreated = nil,
+            bidPlaced = nil,
+            auctionWon = nil,
+            auctionBuyout = nil,
+            auctionExpired = nil,
+            auctionCancelled = nil,
+            highValueSale = nil,
         },
-        
-        -- Enable/disable specific webhook types
         enabled = {
             auctionCreated = true,
-            bidPlaced = false,        -- Off by default (can be spammy)
+            bidPlaced = false,
             auctionWon = true,
+            auctionBuyout = true,
             auctionExpired = true,
             auctionCancelled = true,
             highValueSale = true,
         },
-        
-        -- High value threshold (triggers additional highValueSale webhook)
         highValueThreshold = 1000,
-        
-        -- Bot appearance in Discord
         botName = 'Auction House',
-        botAvatar = nil,  -- Set to an image URL for custom avatar
+        botAvatar = nil,
     }
 }

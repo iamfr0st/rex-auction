@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#24150d"/>
+      <stop offset="100%" stop-color="#5b3a1f"/>
+    </linearGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8c6239"/>
+      <stop offset="100%" stop-color="#4e331d"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="480" fill="url(#bg)"/>
+  <rect y="332" width="640" height="148" fill="url(#ground)"/>
+  <circle cx="504" cy="104" r="68" fill="#f6d28b" opacity="0.16"/>
+  <path d="M152 304c14-37 45-72 88-88l57-21c23-8 51-6 72 7l28 17 41-23c21-12 47-15 69-7l26 9-27 34 31 36-36 11-18 44-51-1-16 90h-26l-15-90h-42l-6 90h-28l-5-93h-45l-26 93h-28l17-102-37-50z" fill="#18110d"/>
+  <path d="M383 154l38-50 53-28 32 21-31 28 47 16-29 35-77 13-33-35z" fill="#18110d"/>
+  <path d="M435 99l31-20 20 11-18 15z" fill="#6b4728"/>
+  <path d="M302 178l-42-50-60-24 29 47-42 17 30 28 74 8z" fill="#2a1c15"/>
+  <circle cx="491" cy="137" r="5" fill="#f6d28b"/>
+  <path d="M124 355c50 25 115 38 196 38 94 0 187-24 243-63-29 58-123 104-240 104-92 0-169-32-199-79z" fill="#f6d28b" opacity="0.18"/>
+  <text x="320" y="74" text-anchor="middle" font-family="Georgia, serif" font-size="34" fill="#f6d28b">Horse Auction</text>
+  <text x="320" y="106" text-anchor="middle" font-family="Georgia, serif" font-size="16" fill="#d2b48c">Owned mount preview</text>
+</svg>

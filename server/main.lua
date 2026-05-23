@@ -13,6 +13,49 @@ local PendingCollections = {}  -- [citizenid] = { money = { amount, reason, auct
 
 local SAVE_FILE = 'auctions.json'
 local AUCTION_ID_PREFIX = 'AUC'
+local HORSE_PREVIEW_IMAGE = 'nui://' .. GetCurrentResourceName() .. '/web/dist/horse-preview.svg'
+local HORSE_PREVIEW_IMAGES = {
+    ['a_c_horse_arabian_white'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/5/50/White_Arabian.PNG/revision/latest/scale-to-width-down/162?cb=20240421135017',
+    ['a_c_horse_arabian_redchestnut_pc'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/3/33/Red_Chestnut_Arabian_%28Story_Mode%29.PNG/revision/latest/scale-to-width-down/175?cb=20240421135112',
+    ['a_c_horse_arabian_warpedbrindle_pc'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/2/27/Warped_Brindle_Arabian_New.PNG/revision/latest/scale-to-width-down/176?cb=20240421135144',
+    ['a_c_horse_andalusian_perlino'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/8/81/Perlino_Andalusian.PNG/revision/latest/scale-to-width-down/188?cb=20240420130417',
+    ['a_c_horse_mustang_tigerstripedbay'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/4/44/Tiger_Striped_Bay_Mustang.PNG/revision/latest/scale-to-width-down/184?cb=20240421231130',
+    ['a_c_horse_shire_ravenblack'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/7/75/Raven_Black_Shire.PNG/revision/latest/scale-to-width-down/186?cb=20240421233442',
+    ['a_c_horse_kladruber_black'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/8/8e/Black_Kladruber.PNG/revision/latest/scale-to-width-down/185?cb=20240421165440',
+    ['a_c_horse_appaloosa_fewspotted_pc'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/a/a7/Few_Spotted_Appaloosa.PNG/revision/latest/scale-to-width-down/188?cb=20240420133829',
+    ['a_c_horse_mustang_goldendun'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/b/b2/Golden_Dun_Mustang.PNG/revision/latest/scale-to-width-down/192?cb=20240421231123',
+    ['a_c_horse_nokota_whiteroan'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/6/6c/White_Roan_Nokota.PNG/revision/latest/scale-to-width-down/181?cb=20240421232324',
+    ['a_c_horse_missourifoxtrotter_silverdapplepinto'] = 'https://static.wikia.nocookie.net/reddeadredemption/images/4/42/Silver_Dapple_Minto_Missouri_Fox_Trotter.PNG/revision/latest/scale-to-width-down/171?cb=20240421175828'
+}
+local HORSE_HANDLING_BY_MODEL = {
+    ['a_c_horse_arabian_white'] = 'HORSE_HANDLING_ELITE',
+    ['a_c_horse_arabian_redchestnut_pc'] = 'HORSE_HANDLING_ELITE',
+    ['a_c_horse_arabian_warpedbrindle_pc'] = 'HORSE_HANDLING_ELITE',
+    ['a_c_horse_andalusian_perlino'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_mustang_tigerstripedbay'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_shire_ravenblack'] = 'HORSE_HANDLING_HEAVY',
+    ['a_c_horse_kladruber_black'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_appaloosa_fewspotted_pc'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_mustang_goldendun'] = 'HORSE_HANDLING_STANDARD',
+    ['a_c_horse_nokota_whiteroan'] = 'HORSE_HANDLING_RACE',
+    ['a_c_horse_missourifoxtrotter_silverdapplepinto'] = 'HORSE_HANDLING_STANDARD'
+}
+local getHorseHandlingForModel
+local getHorseHandlingForHorse
+
+local function getHorseHandlingForXp(xp)
+    local value = tonumber(xp) or 0
+
+    if value >= 1000 then
+        return 'HORSE_HANDLING_ELITE'
+    elseif value >= 400 then
+        return 'HORSE_HANDLING_RACE'
+    elseif value >= 200 then
+        return 'HORSE_HANDLING_STANDARD'
+    end
+
+    return 'HORSE_HANDLING_HEAVY'
+end
 
 -- ============================================
 -- SECURITY: RATE LIMITING
@@ -98,17 +141,67 @@ end
 -- Generate image URL from item name
 local function getItemImage(itemName)
     if not itemName then return nil end
-    return 'nui://rsg-inventory/html/images/' .. itemName .. '.png'
+
+    local sharedItem = RSGCore and RSGCore.Shared and RSGCore.Shared.Items and RSGCore.Shared.Items[itemName]
+    local imageName = sharedItem and sharedItem.image or (itemName .. '.png')
+
+    return 'nui://rsg-inventory/html/images/' .. imageName
 end
 
--- Build image metadata for client (includes fallback info)
-local function buildImageMetadata(itemName)
+local function buildImageMetadataForUrl(imageUrl, itemName)
     return {
-        url = getItemImage(itemName),
+        url = imageUrl,
         itemName = itemName,
         fallbackUrl = 'nui://' .. GetCurrentResourceName() .. '/web/dist/fallback.svg',
         loaded = false
     }
+end
+
+local function getHorsePreviewImage(model)
+    if not model then
+        return HORSE_PREVIEW_IMAGE
+    end
+
+    return HORSE_PREVIEW_IMAGES[string.lower(tostring(model))] or HORSE_PREVIEW_IMAGE
+end
+
+local function isHorseAuctionMetadata(metadata)
+    return type(metadata) == 'table' and metadata.auctionType == 'horse'
+end
+
+local function isAllowedHorseImageUrl(url)
+    if type(url) ~= 'string' then
+        return false
+    end
+
+    local trimmed = url:match('^%s*(.-)%s*$')
+    if not trimmed or trimmed == '' then
+        return false
+    end
+
+    local lowerUrl = string.lower(trimmed)
+    if not (string.find(lowerUrl, 'https://', 1, true) == 1 or string.find(lowerUrl, 'http://', 1, true) == 1) then
+        return false
+    end
+
+    local allowedHosts = {
+        'cdn.discordapp.com',
+        'media.discordapp.net',
+        'images-ext-1.discordapp.net',
+        'images-ext-2.discordapp.net',
+    }
+
+    for _, host in ipairs(allowedHosts) do
+        if string.find(lowerUrl, '://' .. host .. '/', 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function buildImageMetadata(itemName)
+    return buildImageMetadataForUrl(getItemImage(itemName), itemName)
 end
 
 -- Track missing images for debugging
@@ -154,12 +247,34 @@ local function loadAuctions()
             
             -- Backfill images for existing auctions
             for auctionId, auction in pairs(Auctions) do
-                if auction.item and not auction.item.image then
-                    auction.item.image = getItemImage(auction.item.name)
+                if auction.item then
+                    if isHorseAuctionMetadata(auction.item.metadata) then
+                        local horseImageUrl = auction.item.metadata and auction.item.metadata.horseImageUrl
+                        local resolvedHandling = getHorseHandlingForHorse(
+                            auction.item.metadata and auction.item.metadata.horseModel,
+                            auction.item.metadata and auction.item.metadata.horseXp
+                        )
+                        if resolvedHandling then
+                            auction.item.metadata.horseHandling = resolvedHandling
+                        end
+                        auction.item.image = horseImageUrl or auction.item.image or getHorsePreviewImage(auction.item.metadata.horseModel)
+                    elseif not auction.item.image then
+                        auction.item.image = getItemImage(auction.item.name)
+                    end
                 end
                 -- Backfill image metadata for existing auctions
-                if auction.item and not auction.item.imageMeta then
-                    auction.item.imageMeta = buildImageMetadata(auction.item.name)
+                if auction.item then
+                    if isHorseAuctionMetadata(auction.item.metadata) then
+                        local horseImageUrl = auction.item.metadata and auction.item.metadata.horseImageUrl
+                        if horseImageUrl or not auction.item.imageMeta then
+                            auction.item.imageMeta = buildImageMetadataForUrl(
+                                horseImageUrl or auction.item.image or getHorsePreviewImage(auction.item.metadata.horseModel),
+                                auction.item.name
+                            )
+                        end
+                    elseif not auction.item.imageMeta then
+                        auction.item.imageMeta = buildImageMetadata(auction.item.name)
+                    end
                 end
                 -- Backfill cents values for existing auctions (convert old dollar values)
                 if auction.startingBid and not auction.startingBidCents then
@@ -272,20 +387,79 @@ local function addPlayerItem(src, itemName, count, metadata)
     return countAfter >= countBefore + count
 end
 
-local function getPlayerMoney(src)
+local function getNearbyAuctioneerConfig(src)
+    local ped = GetPlayerPed(src)
+    if not ped then return nil, nil end
+
+    local playerCoords = GetEntityCoords(ped)
+    if not playerCoords then return nil, nil end
+
+    local npcs = Config.AuctioneerNPCs
+    if not npcs then return nil, nil end
+
+    local maxDistance = Config.InteractionDistance or 2.5
+
+    for index, npcConfig in ipairs(npcs) do
+        local npcCoords = npcConfig.coords
+        local distance = #(playerCoords - npcCoords)
+        if distance <= maxDistance then
+            return npcConfig, index
+        end
+    end
+
+    return nil, nil
+end
+
+local function getAuctioneerMoneyType(src)
+    local npcConfig = getNearbyAuctioneerConfig(src)
+    if npcConfig and npcConfig.bank and npcConfig.bank ~= '' then
+        return npcConfig.bank
+    end
+
+    return 'bank'
+end
+
+local function getAuctioneerMoneyTypeByIndex(npcIndex)
+    local config = Config.AuctioneerNPCs and Config.AuctioneerNPCs[npcIndex]
+    if config and config.bank and config.bank ~= '' then
+        return config.bank
+    end
+
+    return 'bank'
+end
+
+local function getPlayerMoney(src, moneyType)
     local Player = getPlayer(src)
     if not Player then return 0, 0 end
     
     local money = Player.PlayerData.money
-    -- Return money as cents (multiply by 100)
-    local cash = money['cash'] or 0
-    local bank = money['bank'] or 0
+    local cash = math.max(0, money['cash'] or 0)
+    local resolvedMoneyType = moneyType or getAuctioneerMoneyType(src)
+    local bank = money[resolvedMoneyType]
+
+    if bank == nil then
+        bank = money['bank'] or 0
+    end
+
+    bank = math.max(0, bank)
+
     return Money.dollarsToCents(cash), Money.dollarsToCents(bank)
 end
 
+RSGCore.Functions.CreateCallback('auction:server:getOpeningBalances', function(source, cb, npcIndex)
+    local moneyType = npcIndex and getAuctioneerMoneyTypeByIndex(tonumber(npcIndex)) or getAuctioneerMoneyType(source)
+    local cashCents, bankCents = getPlayerMoney(source, moneyType)
+
+    cb({
+        cashCents = cashCents,
+        bankCents = bankCents,
+        moneyType = moneyType
+    })
+end)
+
 -- Emit balance update to client for NUI sync
-local function emitBalanceUpdate(src)
-    local cashCents, bankCents = getPlayerMoney(src)
+local function emitBalanceUpdate(src, moneyType)
+    local cashCents, bankCents = getPlayerMoney(src, moneyType)
     TriggerClientEvent('auction:client:balanceUpdated', src, {
         cash = cashCents,
         bank = bankCents
@@ -298,21 +472,21 @@ local function removePlayerMoney(src, amountCents, silent)
     
     -- Convert cents to dollars for framework call
     local amountDollars = Money.centsToDollars(amountCents)
+    local moneyType = getAuctioneerMoneyType(src)
     
-    local cashCents, bankCents = getPlayerMoney(src)
+    local cashCents, bankCents = getPlayerMoney(src, moneyType)
     local cashDollars = Money.centsToDollars(cashCents)
-    local bankDollars = Money.centsToDollars(bankCents)
     
     if cashCents >= amountCents then
         Player.Functions.RemoveMoney('cash', amountDollars)
-        if not silent then emitBalanceUpdate(src) end
+        if not silent then emitBalanceUpdate(src, moneyType) end
         return true
     elseif cashCents + bankCents >= amountCents then
         -- Use all cash first, then bank
         Player.Functions.RemoveMoney('cash', cashDollars)
         local remainingCents = amountCents - cashCents
-        Player.Functions.RemoveMoney('bank', Money.centsToDollars(remainingCents))
-        if not silent then emitBalanceUpdate(src) end
+        Player.Functions.RemoveMoney(moneyType, Money.centsToDollars(remainingCents))
+        if not silent then emitBalanceUpdate(src, moneyType) end
         return true
     end
     return false
@@ -324,9 +498,10 @@ local function addPlayerMoney(src, amountCents, silent)
     
     -- Convert cents to dollars for framework call
     local amountDollars = Money.centsToDollars(amountCents)
+    local moneyType = getAuctioneerMoneyType(src)
     
-    Player.Functions.AddMoney('bank', amountDollars)
-    if not silent then emitBalanceUpdate(src) end
+    Player.Functions.AddMoney(moneyType, amountDollars)
+    if not silent then emitBalanceUpdate(src, moneyType) end
     return true
 end
 
@@ -339,6 +514,137 @@ local function getPlayerInfo(src)
         name = Player.PlayerData.charinfo.firstname .. ' ' .. Player.PlayerData.charinfo.lastname,
         citizenid = Player.PlayerData.citizenid
     }
+end
+
+local function buildHorseEscrowCitizenid(auctionId)
+    return ('auction_escrow:%s'):format(tostring(auctionId))
+end
+
+local function getEligibleHorseSaleData(model)
+    if GetResourceState('rsg-horses') ~= 'started' then
+        return nil
+    end
+
+    local ok, saleData = pcall(function()
+        return exports['rsg-horses']:GetEligibleHorseSaleData(model)
+    end)
+
+    if not ok or type(saleData) ~= 'table' then
+        return nil
+    end
+
+    return saleData
+end
+
+getHorseHandlingForModel = function(model)
+    return HORSE_HANDLING_BY_MODEL[string.lower(tostring(model or ''))]
+end
+
+getHorseHandlingForHorse = function(model, xp)
+    local xpHandling = getHorseHandlingForXp(xp)
+    if xpHandling then
+        return xpHandling
+    end
+
+    return getHorseHandlingForModel(model)
+end
+
+local function copyOptionalHorseStatMetadata(sourceMetadata, targetMetadata)
+    if type(sourceMetadata) ~= 'table' or type(targetMetadata) ~= 'table' then
+        return
+    end
+
+    local allowedKeys = {
+        'horseSpeedValue',
+        'horseSpeedMinValue',
+        'horseSpeedMaxValue',
+        'horseSpeedEquipmentValue',
+        'horseSpeedEquipmentMinValue',
+        'horseSpeedEquipmentMaxValue',
+        'horseSpeedCapacityValue',
+        'horseSpeedCapacityMinValue',
+        'horseSpeedCapacityMaxValue',
+        'horseAccValue',
+        'horseAccMinValue',
+        'horseAccMaxValue',
+        'horseAccEquipmentValue',
+        'horseAccEquipmentMinValue',
+        'horseAccEquipmentMaxValue',
+        'horseAccCapacityValue',
+        'horseAccCapacityMinValue',
+        'horseAccCapacityMaxValue',
+        'horseHandling',
+        'preservedStats',
+    }
+
+    for _, key in ipairs(allowedKeys) do
+        if sourceMetadata[key] ~= nil then
+            targetMetadata[key] = sourceMetadata[key]
+        end
+    end
+
+    if targetMetadata.horseHandling == nil then
+        targetMetadata.horseHandling = getHorseHandlingForHorse(
+            targetMetadata.horseModel or sourceMetadata.horseModel,
+            targetMetadata.horseXp or sourceMetadata.horseXp
+        )
+    end
+end
+
+local function getOwnedHorseRow(src, horseDbId)
+    local Player = getPlayer(src)
+    if not Player or not horseDbId then
+        return nil
+    end
+
+    return MySQL.single.await(
+        'SELECT * FROM player_horses WHERE id = ? AND citizenid = ? AND active = ?',
+        { tonumber(horseDbId), Player.PlayerData.citizenid, 1 }
+    )
+end
+
+local function decodeHorseComponents(rawComponents)
+    if type(rawComponents) == 'table' then
+        return rawComponents
+    end
+
+    if type(rawComponents) == 'string' and rawComponents ~= '' then
+        local ok, decoded = pcall(json.decode, rawComponents)
+        if ok and type(decoded) == 'table' then
+            return decoded
+        end
+    end
+
+    return {}
+end
+
+local function persistHorseAuctionStats(horseRow, submittedMetadata)
+    if type(horseRow) ~= 'table' or not horseRow.id or type(submittedMetadata) ~= 'table' or type(submittedMetadata.preservedStats) ~= 'table' then
+        return
+    end
+
+    local components = decodeHorseComponents(horseRow.components)
+    components.PreservedStats = submittedMetadata.preservedStats
+    horseRow.components = json.encode(components)
+    MySQL.update.await('UPDATE player_horses SET components = ? WHERE id = ?', { horseRow.components, horseRow.id })
+end
+
+local function moveHorseToEscrow(auctionId, horseDbId, citizenid)
+    local updated = MySQL.update.await(
+        'UPDATE player_horses SET citizenid = ?, active = ? WHERE id = ? AND citizenid = ?',
+        { buildHorseEscrowCitizenid(auctionId), 0, tonumber(horseDbId), citizenid }
+    )
+
+    return (tonumber(updated) or 0) > 0
+end
+
+local function assignEscrowHorseToCitizen(auctionId, horseDbId, citizenid)
+    local updated = MySQL.update.await(
+        'UPDATE player_horses SET citizenid = ?, active = ? WHERE id = ? AND citizenid = ?',
+        { citizenid, 0, tonumber(horseDbId), buildHorseEscrowCitizenid(auctionId) }
+    )
+
+    return (tonumber(updated) or 0) > 0
 end
 
 local function hasItem(src, itemName, count)
@@ -580,6 +886,14 @@ local function queueItemCollection(citizenid, itemName, itemLabel, count, metada
     if not PendingCollections[citizenid] then
         PendingCollections[citizenid] = { money = nil, items = {} }
     end
+
+    local imageMeta
+    if isHorseAuctionMetadata(metadata) then
+        imageMeta = buildImageMetadataForUrl(image or getHorsePreviewImage((metadata or {}).horseModel), itemName)
+    else
+        imageMeta = buildImageMetadata(itemName)
+    end
+
     table.insert(PendingCollections[citizenid].items, {
         itemName = itemName,
         itemLabel = itemLabel or itemName,
@@ -587,7 +901,7 @@ local function queueItemCollection(citizenid, itemName, itemLabel, count, metada
         metadata = metadata,
         auctionId = auctionId,
         image = image,
-        imageMeta = buildImageMetadata(itemName),
+        imageMeta = imageMeta,
         soldForCents = soldForCents,
         sellerName = sellerName,
         collectedAt = nil
@@ -662,13 +976,15 @@ local function createAuction(src, itemData)
     if not playerInfo then
         return { success = false, error = 'Player not found' }
     end
-    
-    -- Validate category selection (manual selection required - no auto-matching)
-    if not itemData.category or itemData.category == '' then
+
+    local isHorseAuction = isHorseAuctionMetadata(itemData.metadata)
+
+    -- Validate category selection
+    local selectedCategory = isHorseAuction and 'horses' or itemData.category
+    if not selectedCategory or selectedCategory == '' then
         return { success = false, error = 'Please select a category for your auction' }
     end
-    
-    local selectedCategory = itemData.category
+
     if not isValidCategory(selectedCategory) then
         return { success = false, error = 'Invalid category selected' }
     end
@@ -688,18 +1004,85 @@ local function createAuction(src, itemData)
         ))
         return { success = false, error = 'You already have an active auction for this item', existingAuctionId = existingAuction.id }
     end
-    
-    -- Check if item is blacklisted
-    if isItemBlacklisted(itemData.itemName) then
-        print(('[Auction] Blacklisted item rejected: %s (%s) tried to auction %s'):format(
-            playerInfo.name, playerInfo.citizenid, itemData.itemName
-        ))
-        return { success = false, error = 'This item cannot be auctioned' }
-    end
-    
-    -- Validate item ownership
-    if not hasItem(src, itemData.itemName, itemData.count) then
-        return { success = false, error = 'You do not have this item' }
+
+    local escrowItemData = nil
+
+    if isHorseAuction then
+        local horseDbId = itemData.metadata.horseDbId
+        local submittedHorseMetadata = itemData.metadata
+        local horseRow = getOwnedHorseRow(src, horseDbId)
+        if not horseRow then
+            return { success = false, error = 'Nearby active horse not found' }
+        end
+
+        local horseSaleData = getEligibleHorseSaleData(horseRow.horse)
+        if not horseSaleData then
+            return { success = false, error = 'Only horses configured as rare, epic, or legendary can be auctioned' }
+        end
+
+        itemData.itemName = itemData.itemName or ('horse_' .. tostring(horseRow.id))
+        itemData.itemLabel = horseRow.name or 'Owned Horse'
+        itemData.count = 1
+        itemData.metadata = {
+            auctionType = 'horse',
+            auctionCategory = 'horses',
+            horseDbId = tonumber(horseRow.id),
+            horseId = tostring(horseRow.horseid),
+            horseModel = tostring(horseRow.horse),
+            horseName = tostring(horseRow.name or 'Owned Horse'),
+            horseGender = horseRow.gender,
+            horseStable = horseRow.stable,
+            horseXp = tonumber(horseRow.horsexp) or 0,
+            horseBorn = tonumber(horseRow.born) or 0,
+            horseRarity = tostring(horseSaleData.rarity or 'rare'),
+            horseSpawnCategory = tostring(horseSaleData.category or 'horse')
+        }
+        itemData.metadata.horseHandling = getHorseHandlingForHorse(horseRow.horse, horseRow.horsexp) or itemData.metadata.horseHandling
+        copyOptionalHorseStatMetadata(submittedHorseMetadata, itemData.metadata)
+        persistHorseAuctionStats(horseRow, submittedHorseMetadata)
+
+        local customHorseImageUrl = type(itemData.customImageUrl) == 'string' and itemData.customImageUrl:match('^%s*(.-)%s*$') or nil
+        if customHorseImageUrl and customHorseImageUrl ~= '' then
+            if not isAllowedHorseImageUrl(customHorseImageUrl) then
+                return { success = false, error = 'Horse image must be a Discord-hosted image URL' }
+            end
+            itemData.metadata.horseImageUrl = customHorseImageUrl
+            itemData.image = customHorseImageUrl
+        else
+            itemData.image = getHorsePreviewImage(horseRow.horse)
+        end
+
+        escrowItemData = {
+            escrowType = 'horse',
+            itemName = itemData.itemName,
+            count = 1,
+            metadata = itemData.metadata,
+            owner = src,
+            ownerCitizenid = playerInfo.citizenid,
+            horseDbId = tonumber(horseRow.id),
+            horseId = tostring(horseRow.horseid)
+        }
+    else
+        -- Check if item is blacklisted
+        if isItemBlacklisted(itemData.itemName) then
+            print(('[Auction] Blacklisted item rejected: %s (%s) tried to auction %s'):format(
+                playerInfo.name, playerInfo.citizenid, itemData.itemName
+            ))
+            return { success = false, error = 'This item cannot be auctioned' }
+        end
+
+        -- Validate item ownership
+        if not hasItem(src, itemData.itemName, itemData.count) then
+            return { success = false, error = 'You do not have this item' }
+        end
+
+        escrowItemData = {
+            itemName = itemData.itemName,
+            count = itemData.count,
+            metadata = itemData.metadata or {},
+            owner = src,
+            ownerCitizenid = playerInfo.citizenid
+        }
     end
     
     -- Validate auction parameters
@@ -775,20 +1158,31 @@ local function createAuction(src, itemData)
         ))
     end
     
-    -- Remove item from inventory (escrow)
-    if not removePlayerItem(src, itemData.itemName, itemData.count) then
-        -- Refund fee if item removal fails
-        if creationFeeCents > 0 then
-            addPlayerMoney(src, creationFeeCents)
-        end
-        return { success = false, error = 'Failed to remove item from inventory' }
-    end
-    
     local auctionId = generateAuctionId()
     local now = os.time()
-    
+
+    -- Remove item from inventory (escrow)
+    if isHorseAuction then
+        if not moveHorseToEscrow(auctionId, itemData.metadata.horseDbId, playerInfo.citizenid) then
+            if creationFeeCents > 0 then
+                addPlayerMoney(src, creationFeeCents)
+            end
+            return { success = false, error = 'Failed to move horse into escrow' }
+        end
+    else
+        if not removePlayerItem(src, itemData.itemName, itemData.count) then
+            -- Refund fee if item removal fails
+            if creationFeeCents > 0 then
+                addPlayerMoney(src, creationFeeCents)
+            end
+            return { success = false, error = 'Failed to remove item from inventory' }
+        end
+    end
+
     -- Use client-provided image or generate from item name
-    local imageUrl = itemData.image or getItemImage(itemData.itemName)
+    local imageUrl = isHorseAuction
+        and ((itemData.metadata and itemData.metadata.horseImageUrl) or itemData.image or getHorsePreviewImage(itemData.metadata.horseModel))
+        or (itemData.image or getItemImage(itemData.itemName))
     
     local auction = {
         id = auctionId,
@@ -800,10 +1194,12 @@ local function createAuction(src, itemData)
         item = {
             name = itemData.itemName,
             label = itemData.itemLabel or itemData.itemName,
-            count = itemData.count,
+            count = isHorseAuction and 1 or itemData.count,
             metadata = itemData.metadata or {},
             image = imageUrl,
-            imageMeta = buildImageMetadata(itemData.itemName)
+            imageMeta = isHorseAuction
+                and buildImageMetadataForUrl(imageUrl, itemData.itemName)
+                or buildImageMetadata(itemData.itemName)
         },
         category = selectedCategory,
         startingBidCents = startingBidCents,
@@ -818,13 +1214,7 @@ local function createAuction(src, itemData)
     }
     
     Auctions[auctionId] = auction
-    Escrow.items[auctionId] = {
-        itemName = itemData.itemName,
-        count = itemData.count,
-        metadata = itemData.metadata or {},
-        owner = src,
-        ownerCitizenid = playerInfo.citizenid
-    }
+    Escrow.items[auctionId] = escrowItemData
     BidHistory[auctionId] = {}
     
     -- Set end timer
@@ -1369,7 +1759,13 @@ local function cancelAuction(src, auctionId)
     -- Return item to owner
     local itemData = Escrow.items[auctionId]
     if itemData then
-        addPlayerItem(src, itemData.itemName, itemData.count, itemData.metadata)
+        if isHorseAuctionMetadata(itemData.metadata) then
+            if not assignEscrowHorseToCitizen(auctionId, itemData.metadata.horseDbId, playerInfo.citizenid) then
+                return { success = false, error = 'Failed to restore horse ownership' }
+            end
+        else
+            addPlayerItem(src, itemData.itemName, itemData.count, itemData.metadata)
+        end
         Escrow.items[auctionId] = nil
     end
     
@@ -1768,14 +2164,25 @@ RegisterNetEvent('auction:server:collectItem', function(auctionId, itemName)
         return
     end
 
-    -- Add item to player inventory (verifies success internally)
-    if not addPlayerItem(src, itemData.itemName, itemData.count, itemData.metadata) then
-        TriggerClientEvent('auction:client:collectionResult', src, {
-            success = false,
-            error = 'Insufficient inventory space',
-            type = 'item'
-        })
-        return
+    if isHorseAuctionMetadata(itemData.metadata) then
+        if not assignEscrowHorseToCitizen(auctionId, itemData.metadata.horseDbId, citizenid) then
+            TriggerClientEvent('auction:client:collectionResult', src, {
+                success = false,
+                error = 'Failed to assign horse ownership',
+                type = 'item'
+            })
+            return
+        end
+    else
+        -- Add item to player inventory (verifies success internally)
+        if not addPlayerItem(src, itemData.itemName, itemData.count, itemData.metadata) then
+            TriggerClientEvent('auction:client:collectionResult', src, {
+                success = false,
+                error = 'Insufficient inventory space',
+                type = 'item'
+            })
+            return
+        end
     end
     
     -- Mark as collected
@@ -1803,6 +2210,7 @@ RegisterNetEvent('auction:server:collectItem', function(auctionId, itemName)
     TriggerClientEvent('auction:client:collectionResult', src, {
         success = true,
         type = 'item',
+        auctionId = auctionId,
         itemName = itemData.itemName,
         itemLabel = itemData.itemLabel,
         count = itemData.count
@@ -1928,7 +2336,7 @@ RegisterNetEvent('auction:server:validateNPCInteraction', function(data)
     end
     
     -- Validation passed - tell client to open UI
-    TriggerClientEvent('auction:client:openFromNPC', src)
+    TriggerClientEvent('auction:client:openFromNPC', src, npcIndex)
 end)
 
 -- ============================================

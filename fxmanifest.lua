@@ -16,6 +16,7 @@ files {
 
 shared_scripts {
     '@ox_lib/init.lua',
+    '@oxmysql/lib/MySQL.lua',
     'config.lua',
     'shared/money.lua'
 }
@@ -33,5 +34,6 @@ server_scripts {
 dependencies {
     'rsg-core',
     'ox_lib',
+    'oxmysql',
     'ox_target'
 }
