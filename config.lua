@@ -128,6 +128,21 @@ Config = {
         'blood_money_clip',
     },
 
+    -- Horse auction allowlist by breed.
+    -- Breed is derived from the horse model name, for example:
+    -- a_c_horse_appaloosa_fewspotted_pc -> appaloosa
+    -- a_c_horse_missourifoxtrotter_silverdapplepinto -> missourifoxtrotter
+    AllowedHorseBreeds = {
+        'appaloosa',
+        'arabian',
+        'andalusian',
+        'mustang',
+        'shire',
+        'kladruber',
+        'nokota',
+        'missourifoxtrotter',
+    },
+
     -- NPC Auctioneers
     AuctioneerNPCs = {
         {

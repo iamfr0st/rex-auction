@@ -520,20 +520,36 @@ local function buildHorseEscrowCitizenid(auctionId)
     return ('auction_escrow:%s'):format(tostring(auctionId))
 end
 
-local function getEligibleHorseSaleData(model)
-    if GetResourceState('rsg-horses') ~= 'started' then
+local function getHorseBreedFromModel(model)
+    local normalizedModel = string.lower(tostring(model or ''))
+    if normalizedModel == '' then
         return nil
     end
 
-    local ok, saleData = pcall(function()
-        return exports['rsg-horses']:GetEligibleHorseSaleData(model)
-    end)
+    local modelSuffix = normalizedModel:match('^a_c_horse_(.+)$') or normalizedModel:match('^a_c_(.+)$') or normalizedModel
+    local breed = modelSuffix:match('^([a-z0-9]+)_') or modelSuffix
 
-    if not ok or type(saleData) ~= 'table' then
+    if not breed or breed == '' then
         return nil
     end
 
-    return saleData
+    return breed
+end
+
+local function isAllowedHorseBreed(model)
+    local breed = getHorseBreedFromModel(model)
+    if not breed then
+        return false, nil
+    end
+
+    local allowedBreeds = Config.AllowedHorseBreeds or {}
+    for _, allowedBreed in ipairs(allowedBreeds) do
+        if breed == string.lower(tostring(allowedBreed or '')) then
+            return true, breed
+        end
+    end
+
+    return false, breed
 end
 
 getHorseHandlingForModel = function(model)
@@ -1015,9 +1031,9 @@ local function createAuction(src, itemData)
             return { success = false, error = 'Nearby active horse not found' }
         end
 
-        local horseSaleData = getEligibleHorseSaleData(horseRow.horse)
-        if not horseSaleData then
-            return { success = false, error = 'Only horses configured as rare, epic, or legendary can be auctioned' }
+        local isAllowedBreed, horseBreed = isAllowedHorseBreed(horseRow.horse)
+        if not isAllowedBreed then
+            return { success = false, error = 'This horse breed is not allowed for auction' }
         end
 
         itemData.itemName = itemData.itemName or ('horse_' .. tostring(horseRow.id))
@@ -1029,13 +1045,12 @@ local function createAuction(src, itemData)
             horseDbId = tonumber(horseRow.id),
             horseId = tostring(horseRow.horseid),
             horseModel = tostring(horseRow.horse),
+            horseBreed = horseBreed,
             horseName = tostring(horseRow.name or 'Owned Horse'),
             horseGender = horseRow.gender,
             horseStable = horseRow.stable,
             horseXp = tonumber(horseRow.horsexp) or 0,
-            horseBorn = tonumber(horseRow.born) or 0,
-            horseRarity = tostring(horseSaleData.rarity or 'rare'),
-            horseSpawnCategory = tostring(horseSaleData.category or 'horse')
+            horseBorn = tonumber(horseRow.born) or 0
         }
         itemData.metadata.horseHandling = getHorseHandlingForHorse(horseRow.horse, horseRow.horsexp) or itemData.metadata.horseHandling
         copyOptionalHorseStatMetadata(submittedHorseMetadata, itemData.metadata)
